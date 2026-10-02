@@ -22,7 +22,7 @@ by the W3C and the IETF. The main APIs:
 
 The browser handles codecs (Opus for audio; VP8, VP9, H.264 or AV1 for video, depending on the
 browser), echo cancellation, a **jitter buffer** (a small queue that smooths out packets arriving at
-uneven times), and **congestion control** that lowers the bitrate when the network gets worse.
+uneven times), and **congestion control** (lowering the bitrate when the network gets worse).
 
 Media travels mostly over **UDP**, because in a call a late packet is useless, and TCP would stall
 everything behind one lost packet (see [TCP vs UDP](/posts/tcp-vs-udp)).
@@ -43,7 +43,7 @@ recording or group calls. You build or run those.
 
 ## Signaling: the part you build
 
-Before two peers can talk, they exchange two kinds of information:
+Before two peers can talk, they exchange two kinds of messages:
 
 1. **A session description (SDP).** SDP (Session Description Protocol) is a text format listing the
    media tracks a peer wants to send, the codecs it supports, and values used for security checks.
@@ -60,10 +60,10 @@ How these messages travel is up to you, usually over a WebSocket to your own ser
    | --- offer (SDP) --------------> | --- offer (SDP) ----------------> |
    |                                 |                   createAnswer()  |
    | <------------ answer (SDP) ---- | <-------------- answer (SDP) ---- |
-   | --- ICE candidates -----------> | -------------------------------> |
+   | --- ICE candidates -----------> | --------------------------------> |
    | <------------------------------ | <------------- ICE candidates --- |
    |                                                                     |
-   | <===== media flows peer to peer (or via TURN), not via signaling ==> |
+   | <===== media flows peer to peer (or via TURN), not via signaling => |
 ```
 
 A trimmed SDP offer looks like this:
@@ -76,7 +76,7 @@ a=fingerprint:sha-256 7B:8B:F0:...:A2
 a=rtpmap:111 opus/48000/2
 ```
 
-The caller's side in the browser, without error handling:
+The caller's side, without error handling:
 
 ```js
 const pc = new RTCPeerConnection({
@@ -105,7 +105,7 @@ ws.send(JSON.stringify({ type: "offer", sdp: pc.localDescription }));
 ```
 
 The signaling server is an ordinary backend service: it authenticates users, checks room access and
-relays messages. It must also handle reconnects, and both peers sending an offer at once ("glare");
+relays messages. It must also handle reconnects and "glare" (both peers sending an offer at once);
 MDN documents a "perfect negotiation" pattern for that.
 
 ## NAT traversal: ICE, STUN and TURN
@@ -116,11 +116,11 @@ some port. Nobody outside can send to `192.168.1.20` directly.
 
 **ICE** (Interactive Connectivity Establishment) finds a path anyway. Each peer collects candidates:
 
-| Candidate type | What it is | Found by |
-|---|---|---|
-| `host` | The device's own address, often private | Reading local interfaces |
-| `srflx` (server reflexive) | The public address and port the NAT uses for you | Asking a STUN server |
-| `relay` | An address on a TURN server that forwards your packets | Allocating it on a TURN server |
+| Candidate type | What it is |
+|---|---|
+| `host` | The device's own address, often private |
+| `srflx` (server reflexive) | Your public address and port on the NAT, as seen by a STUN server |
+| `relay` | An address on a TURN server that forwards your packets |
 
 - **STUN** (Session Traversal Utilities for NAT): the browser asks a STUN server "which address do
   you see me as?". STUN is cheap: tiny requests, no media.
@@ -134,17 +134,12 @@ some port. Nobody outside can send to `192.168.1.20` directly.
 
 ### The cost of TURN
 
-TURN carries **every media packet, in both directions, for the whole call**. A one-to-one call where
-each person sends 1.5 Mbit/s, fully relayed:
-
-```text
-TURN egress = 2 streams x 1.5 Mbit/s = 3 Mbit/s
-one hour    = 3 Mbit/s x 3,600 s = 10,800 Mbit = about 1.35 GB of outbound traffic
-```
-
-With cloud egress pricing, that adds up. Most calls usually connect directly, but you cannot predict
-which will not, so a real product needs TURN. Measure the share of calls that use a `relay`
-candidate (`getStats()` reports the selected candidate pair) and plan capacity from that.
+TURN carries **every media packet, in both directions, for the whole call**. In a fully relayed
+one-to-one call where each person sends 1.5 Mbit/s, the TURN server sends 2 x 1.5 = 3 Mbit/s. One
+hour is 3 x 3,600 = 10,800 Mbit, about 1.35 GB of outbound traffic. With cloud egress pricing, that
+adds up. Most calls connect directly, but you cannot predict
+which will not, so a real product needs TURN. Measure the share of relayed calls (`getStats()`
+reports the selected candidate pair) and plan capacity from that.
 
 > [!WARNING]
 > Never ship long-lived TURN passwords in frontend code: anyone can copy them and relay traffic
@@ -158,7 +153,6 @@ WebRTC media is always encrypted; there is no switch to turn it off. **DTLS** (T
 runs a handshake between the peers, and each peer proves it holds the certificate whose fingerprint
 was in its SDP. The resulting keys protect media with **SRTP**, the secure version of RTP (Real-time
 Transport Protocol, the packet format for audio and video). Data channels run inside DTLS directly.
-
 Two consequences:
 
 - Security depends on your **signaling**. Whoever can change the SDP in transit can swap the
@@ -188,8 +182,8 @@ With more than two people, there are three topologies:
    C ------------ D
 ```
 
-Take **N** participants, each sending video at bitrate **b**, and ignore audio. The numbers use
-b = 1 Mbit/s as an example, not a recommendation:
+For **N** participants each sending video at bitrate **b** (audio ignored; b = 1 Mbit/s is only an
+example):
 
 | | Mesh, per client up / down | SFU, per client up / down | SFU, server sends | MCU, per client up / down |
 |---|---|---|---|---|
@@ -198,11 +192,11 @@ b = 1 Mbit/s as an example, not a recommendation:
 | N = 10 | 9 / 9 Mbit/s | 1 / 9 Mbit/s | 90 Mbit/s | 1 / 1 Mbit/s |
 | N = 25 | 24 / 24 Mbit/s | 1 / 24 Mbit/s | 600 Mbit/s | 1 / 1 Mbit/s |
 
-Mesh fails on **upload** and CPU, because the browser usually encodes the video separately for each
+Mesh fails on **upload** and CPU, because the browser usually encodes the video once per
 connection. It is fine for two people and tolerable for three or four. The SFU is the usual choice;
-its weak spots are client **download** and server outbound traffic, which grow with N. The MCU is
-easy on clients, but the server decodes and re-encodes every stream, which costs a lot of CPU and
-adds delay. Today it is mostly used to connect phones and older systems that expect one mixed stream.
+its weak spots, client **download** and server outbound traffic, grow with N. The MCU is easy on
+clients, but decoding and re-encoding every stream costs a lot of server CPU and adds delay. Today it
+is mostly used to connect phones and older systems that expect one mixed stream.
 
 ## Simulcast and SVC: the right quality for each viewer
 
@@ -226,14 +220,14 @@ An `RTCDataChannel` sends messages over **SCTP** (Stream Control Transmission Pr
 over the same UDP path as the media. Unlike WebSockets, you choose the delivery rules per channel:
 
 ```js
-// Game state: newest data wins, so never retransmit and never wait for order.
+// Game state: newest data wins, so no retransmits and no ordering.
 const state = pc.createDataChannel("state", { ordered: false, maxRetransmits: 0 });
-// File transfer: reliable and ordered, like TCP (the default).
+// File transfer: reliable and ordered (the default).
 const files = pc.createDataChannel("files");
 ```
 
 Use them for low-latency peer-to-peer data: game input, cursor positions, file transfer (in small
-chunks). For chat inside a call, your WebSocket is simpler and already stores messages.
+chunks).
 
 ## Open-source SFUs
 
@@ -243,7 +237,7 @@ You rarely write an SFU yourself. Well-known open-source options:
 |---|---|
 | mediasoup | A library: a Node.js (or Rust) API with C++ media workers. You build signaling and rooms. |
 | Janus | A general-purpose WebRTC server in C with plugins; the VideoRoom plugin is an SFU. |
-| LiveKit | A complete SFU in Go, built on the Pion library, with signaling and client SDKs included. |
+| LiveKit | A complete SFU server in Go (built on the Pion library), with signaling and client SDKs. |
 | Jitsi Videobridge | The SFU behind Jitsi Meet, running on the JVM. |
 
 A library gives full control; a complete server gets you working calls faster. If calls are not
@@ -252,12 +246,11 @@ your core product, a managed video API is also reasonable.
 ## Scaling SFUs and recording
 
 An SFU does not encode video, so its limits are usually **outbound bandwidth**, **packets per second**
-and encryption CPU. Load-test with real or headless browsers; do not trust a single "users per
+and encryption CPU. Load-test with real or headless browsers rather than trusting a "users per
 server" number.
 
-- **Room placement.** Usually a whole room lives on one SFU. A coordination service (often backed by
-  Redis or a database) records which SFU hosts each room, and signaling tells clients where to
-  connect. Moving a live call forces every client to reconnect, so for deploys you **drain** servers:
+- **Room placement.** Usually a whole room lives on one SFU. A coordination service records which
+  SFU hosts each room, and signaling tells clients where to connect. Moving a live call forces every client to reconnect, so for deploys you **drain** servers:
   no new rooms, then wait for calls (which can last hours) to end. See
   [zero-downtime deployments](/posts/deployment-strategies-and-zero-downtime-migrations).
 - **Networking.** Clients send UDP straight to the SFU, so each SFU needs a public IP in its ICE
@@ -274,13 +267,13 @@ server" number.
 
 Each person connects to a nearby SFU, so lost packets are resent over a short distance, and each
 stream crosses the ocean once, not once per viewer: the same two-level fan-out used for
-[big chat rooms](/posts/scaling-websockets-chat). The cost is that room state (who publishes which
-track) must be shared across servers. Jitsi has described cascaded bridges under the name "Octo".
+[big chat rooms](/posts/scaling-websockets-chat). The cost: room state (who publishes which track)
+is shared across servers. Jitsi has described cascaded bridges under the name "Octo".
 
 **Recording** has two common designs:
 
-1. **Per-track.** The SFU forwards each participant's packets to a recorder that writes them to files
-   without re-encoding. Cheap, but merging tracks into one video is a later
+1. **Per-track.** The SFU forwards each participant's packets to a recorder that saves them without
+   re-encoding. Cheap, but merging tracks into one video is a later
    [background job](/posts/background-jobs-and-cron), and syncing tracks with gaps is tricky.
 2. **Composite.** A headless browser joins as a hidden participant, renders the layout, and its screen
    and audio are encoded into one file or stream. Jitsi's Jibri and LiveKit Egress work this way. It
@@ -297,10 +290,10 @@ Either way, tell participants they are being recorded; in many places the law re
 
 ## In practice: a checklist
 
-- [ ] Two people: peer to peer with STUN, TURN as fallback. Three or more: an SFU.
+- [ ] Two people: peer to peer, TURN as fallback. Three or more: an SFU.
 - [ ] TURN on UDP 3478 and TLS 443, with short-lived credentials.
-- [ ] Signaling over `wss://` with real authentication and room authorisation.
-- [ ] Simulcast (or SVC) for video in group calls; only visible videos forwarded.
+- [ ] Signaling over `wss://`, with authentication and room authorisation.
+- [ ] Simulcast (or SVC) in group calls; only visible videos forwarded.
 - [ ] SFUs close to users, rooms placed by load, draining for deploys.
 - [ ] Client stats from `getStats()` collected: packet loss, round-trip time, jitter, relayed or not
       (see [observability](/posts/observability-logs-metrics-traces)).
@@ -308,9 +301,8 @@ Either way, tell participants they are being recorded; in many places the law re
 ## Common mistakes
 
 - **No TURN server.** Everything works in the office and fails for some customers.
-- **Mesh for big calls.** Fine with four people on fibre; broken with eight on Wi-Fi.
 - **Thinking DTLS-SRTP means end-to-end.** With an SFU, the server can see the media.
-- **SFU behind an HTTP load balancer**, or without a public IP or open UDP ports.
+- **SFU behind an HTTP load balancer**, or without a public IP and open UDP ports.
 - **Naive signaling.** Reconnects, glare and network changes (Wi-Fi to mobile needs an ICE restart)
   need careful state handling.
 
@@ -319,5 +311,4 @@ Either way, tell participants they are being recorded; in many places the law re
 - [WebRTC for the Curious](https://webrtcforthecurious.com/): a free book on how the protocols work
 - MDN: [WebRTC API](https://developer.mozilla.org/en-US/docs/Web/API/WebRTC_API)
 - RFC 8445: [Interactive Connectivity Establishment (ICE)](https://www.rfc-editor.org/rfc/rfc8445)
-- RFC 8656: [Traversal Using Relays around NAT (TURN)](https://www.rfc-editor.org/rfc/rfc8656)
 - [High Performance Browser Networking](https://hpbn.co/) by Ilya Grigorik: includes a chapter on WebRTC
