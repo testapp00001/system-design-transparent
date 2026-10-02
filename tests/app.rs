@@ -318,6 +318,16 @@ async fn vote_game_limits_and_winner(db: PgPool) {
         .unwrap();
     assert_eq!(c, 2, "second address in the same /64 is the same voter");
 
+    // Right after the round ends, before the background job freezes the
+    // winner, the results already show the current leader.
+    sqlx::query("UPDATE vote_rounds SET ends_at = now(), starts_at = now() - interval '1 hour' WHERE id = $1")
+        .bind(round_id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let res = app.get("/vote", Opts::default()).await;
+    assert!(res.body.contains("Past rounds") && res.body.contains("MVCC explained"), "{}", res.body);
+
     // Close the round: winners are frozen and voting stops.
     votes::close_round_now(&app.db, round_id).await.unwrap();
     let winner: Option<i64> = sqlx::query_scalar("SELECT winner_suggestion_id FROM vote_polls WHERE id = $1")

@@ -424,7 +424,13 @@ pub async fn winners_for(db: &PgPool, round_ids: &[i64]) -> Result<HashMap<i64, 
         "SELECT p.round_id, t.name AS tag_name, s.title, s.vote_count, fp.slug AS post_slug, fp.title AS post_title
          FROM vote_polls p
          JOIN tags t ON t.slug = p.tag_slug
-         LEFT JOIN suggestions s ON s.id = p.winner_suggestion_id
+         -- Until the background job freezes the winner (up to a minute after the
+         -- round ends), show the current leader so results appear immediately.
+         LEFT JOIN suggestions s ON s.id = COALESCE(p.winner_suggestion_id, (
+             SELECT l.id FROM suggestions l
+             WHERE l.poll_id = p.id AND NOT l.is_hidden AND l.vote_count > 0
+             ORDER BY l.vote_count DESC, l.created_at ASC
+             LIMIT 1))
          LEFT JOIN posts fp ON fp.id = s.fulfilled_post_id AND fp.is_published
          WHERE p.round_id = ANY($1)
          ORDER BY t.name",

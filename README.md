@@ -119,6 +119,22 @@ The app is a single stateless binary plus Postgres, so anything that runs a cont
 behind a load balancer: sessions live in Postgres, migrations and content sync take advisory locks,
 and background jobs run exactly once across instances.
 
+Behind a reverse proxy:
+
+- set `TRUSTED_PROXY_HOPS=1` (one proxy) so voting limits see the real client IP;
+- set `COOKIE_SECURE=true` once the site is served over HTTPS;
+- keep the original `Host` header (Caddy does by default; nginx needs `proxy_set_header Host $host;`),
+  because the CSRF check falls back to comparing `Origin` with `Host` for browsers that don't send
+  Fetch Metadata headers.
+
+A minimal Caddyfile:
+
+```
+example.com {
+    reverse_proxy app:3000
+}
+```
+
 ## Contributing
 
 Articles are the heart of the project. Read [CONTRIBUTING.md](CONTRIBUTING.md) for the article
