@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block content %}
+<article class="prose prose-page">
+  <h1>About this project</h1>
+
+  <p class="lead">
+    Plenty of developers spend years building CRUD apps with MVC, a single database and a manual deploy.
+    Nothing wrong with that — but it means the things senior backend interviews (and real scale) ask about
+    are only learned by people lucky enough to work somewhere that already does them.
+  </p>
+
+  <p>
+    Retries and idempotency keys. Why MySQL and PostgreSQL store rows differently and what that does to
+    performance. Connection pools. Replication and failover. Background jobs. Blue-green deploys. How Discord
+    moved trillions of messages from Cassandra to ScyllaDB. These ideas are scattered across conference talks,
+    company blogs and social-media clips — if you happen to see them.
+  </p>
+
+  <p><b>System Design Transparent</b> writes that knowledge down in one place, for free, in the open.</p>
+
+  <h2>How it works</h2>
+  <ul>
+    <li><b>Articles</b> are Markdown files in the <a href="{{ repo_url }}/tree/main/content/posts">GitHub repository</a>. Anyone can fix, extend or add one with a pull request, so the content can be kept up to date instead of going stale.</li>
+    <li><b>The roadmap</b> lists every topic we think a backend engineer should at least know exists, including ones nobody has written about yet.</li>
+    <li><b>Vote rounds</b> decide what gets written next. A round opens for a few tags (say <i>database</i>, <i>networking</i>, <i>system-design</i>) for a few days. Anyone can suggest a topic and vote — no account needed.</li>
+    <li><b>Accounts</b> are optional: just a username and password, used to save, like and upvote articles. No email, no tracking.</li>
+  </ul>
+
+  <h2>This site is also a worked example</h2>
+  <p>The code behind this site uses, in miniature, several of the patterns the articles explain. It is small enough to read in an afternoon:</p>
+  <ul>
+    <li>PostgreSQL full-text search with weighted <code>tsvector</code>s, GIN indexes and trigram typo tolerance — <a href="{{ repo_url }}/blob/main/src/posts.rs">src/posts.rs</a></li>
+    <li>Race-free vote limits with transaction-scoped advisory locks — <a href="{{ repo_url }}/blob/main/src/votes.rs">src/votes.rs</a></li>
+    <li>Idempotent "set state" endpoints instead of toggles — <a href="{{ repo_url }}/blob/main/src/posts.rs">set_reaction</a></li>
+    <li>A background job that runs on every instance but does its work exactly once — <a href="{{ repo_url }}/blob/main/src/worker.rs">src/worker.rs</a></li>
+    <li>Server-side sessions with hashed tokens, Argon2id passwords, CSRF protection via Fetch Metadata — <a href="{{ repo_url }}/blob/main/src/auth.rs">src/auth.rs</a>, <a href="{{ repo_url }}/blob/main/src/security.rs">src/security.rs</a></li>
+    <li>Trusting <code>X-Forwarded-For</code> correctly and grouping IPv6 by /64 — <a href="{{ repo_url }}/blob/main/src/ip.rs">src/ip.rs</a></li>
+    <li>Graceful shutdown, health checks, a multi-stage Dockerfile and a CI pipeline — <a href="{{ repo_url }}">see the repository</a></li>
+  </ul>
+
+  <h2>Contributing</h2>
+  <p>
+    Read <a href="{{ repo_url }}/blob/main/CONTRIBUTING.md">CONTRIBUTING.md</a> for the article template and style guide.
+    Good articles explain <i>the problem first</i>, then the mechanism, then the trade-offs, and say clearly when <i>not</i> to use something.
+    Accuracy beats length: link to primary sources (official docs, the company's own engineering blog) for every claim about a real system.
+  </p>
+</article>
+{% endblock %}

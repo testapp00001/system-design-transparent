@@ -1,0 +1,281 @@
+# The knowledge map shown on /roadmap.
+#
+# Every topic a backend engineer should at least know exists — whether or not
+# an article has been written yet. Add `post = "<slug>"` once an article covers
+# a topic. Topics without a post are shown as "not written yet" and are good
+# candidates for vote rounds.
+
+[[section]]
+title = "Foundations"
+description = "Mental tools you will use in every other section."
+
+  [[section.topic]]
+  title = "How to approach a system design problem"
+  note = "Requirements, estimates, API, data model, high-level design, deep dives."
+
+  [[section.topic]]
+  title = "Back-of-the-envelope estimation"
+  note = "Latency numbers, QPS, storage and bandwidth math in five minutes."
+
+  [[section.topic]]
+  title = "Concurrency models: threads, async/await, event loops, actors"
+
+  [[section.topic]]
+  title = "Queueing basics: Little's law, utilisation and why latency explodes at 90% load"
+
+  [[section.topic]]
+  title = "Linux for backend developers: processes, file descriptors, signals"
+
+[[section]]
+title = "Networking & protocols"
+description = "The plumbing every request travels through."
+
+  [[section.topic]]
+  title = "TCP vs UDP — and when to use which"
+
+  [[section.topic]]
+  title = "HTTP/1.1, HTTP/2 and HTTP/3 (QUIC)"
+
+  [[section.topic]]
+  title = "TLS and HTTPS: handshakes, certificates, termination"
+
+  [[section.topic]]
+  title = "DNS: resolution, TTLs and DNS-based load balancing"
+
+  [[section.topic]]
+  title = "Polling, long polling, SSE, WebSockets"
+
+  [[section.topic]]
+  title = "Scaling WebSockets: a 10,000-person chat room"
+
+  [[section.topic]]
+  title = "CDNs and edge caching"
+
+  [[section.topic]]
+  title = "Reverse proxies: nginx, Caddy, Envoy, HAProxy"
+
+[[section]]
+title = "APIs & service communication"
+description = "Contracts between programs, and how to keep them reliable."
+
+  [[section.topic]]
+  title = "Retries, timeouts and idempotency keys"
+  post = "retries-timeouts-and-idempotency"
+  note = "Why a retried payment must never charge twice."
+
+  [[section.topic]]
+  title = "REST vs gRPC vs GraphQL"
+
+  [[section.topic]]
+  title = "API design: pagination, versioning, errors"
+
+  [[section.topic]]
+  title = "Rate limiting algorithms"
+
+  [[section.topic]]
+  title = "Webhooks: delivering events to other systems reliably"
+
+  [[section.topic]]
+  title = "API gateways and backend-for-frontend (BFF)"
+
+  [[section.topic]]
+  title = "Serialization: JSON, Protobuf, Avro, MessagePack"
+
+[[section]]
+title = "Databases"
+description = "Where most performance problems — and most data loss — come from."
+
+  [[section.topic]]
+  title = "How databases store data: MySQL (InnoDB) vs PostgreSQL"
+  post = "how-databases-store-data"
+  note = "Pages, B-trees, heaps vs clustered indexes, MVCC, VACUUM."
+
+  [[section.topic]]
+  title = "Indexes and reading EXPLAIN"
+
+  [[section.topic]]
+  title = "Transactions and isolation levels"
+
+  [[section.topic]]
+  title = "Connection pooling"
+
+  [[section.topic]]
+  title = "Choosing a database: relational, key-value, document, wide-column, time-series, search, graph, vector"
+  post = "choosing-a-database"
+
+  [[section.topic]]
+  title = "Replication and high availability"
+
+  [[section.topic]]
+  title = "Backups, point-in-time recovery and restore drills"
+
+  [[section.topic]]
+  title = "Partitioning and sharding"
+
+  [[section.topic]]
+  title = "LSM trees vs B-trees"
+
+  [[section.topic]]
+  title = "ORMs, the N+1 problem and when to write SQL"
+
+  [[section.topic]]
+  title = "Vector search and embeddings"
+
+[[section]]
+title = "Caching"
+description = "Making reads cheap without serving wrong data."
+
+  [[section.topic]]
+  title = "Caching strategies, invalidation and stampedes"
+
+  [[section.topic]]
+  title = "HTTP caching: Cache-Control, ETags, CDNs"
+
+  [[section.topic]]
+  title = "Redis beyond caching: data structures, pub/sub, streams"
+
+[[section]]
+title = "Scaling & reliability"
+description = "Serving more traffic, and failing gracefully when things break."
+
+  [[section.topic]]
+  title = "Load balancing and stateless servers"
+
+  [[section.topic]]
+  title = "Resilience patterns: circuit breakers, bulkheads, load shedding"
+
+  [[section.topic]]
+  title = "Autoscaling"
+
+  [[section.topic]]
+  title = "Multi-region and disaster recovery"
+
+  [[section.topic]]
+  title = "Chaos engineering"
+
+[[section]]
+title = "Distributed systems"
+description = "What changes when one machine becomes many."
+
+  [[section.topic]]
+  title = "CAP, PACELC and consistency models"
+
+  [[section.topic]]
+  title = "Distributed transactions: 2PC, sagas and the outbox pattern"
+
+  [[section.topic]]
+  title = "Consensus and leader election (Raft)"
+
+  [[section.topic]]
+  title = "Time and ordering: clocks, Lamport timestamps, Snowflake IDs"
+
+  [[section.topic]]
+  title = "Distributed locks and their pitfalls"
+
+  [[section.topic]]
+  title = "Exactly-once processing: myth and practice"
+
+[[section]]
+title = "Asynchronous processing"
+description = "Doing work later, elsewhere, reliably."
+
+  [[section.topic]]
+  title = "Message queues vs event streams (RabbitMQ, Kafka)"
+
+  [[section.topic]]
+  title = "Background jobs and cron"
+
+  [[section.topic]]
+  title = "Event-driven architecture, event sourcing and CQRS"
+
+  [[section.topic]]
+  title = "Change data capture (CDC)"
+
+  [[section.topic]]
+  title = "Stream processing"
+
+[[section]]
+title = "Architecture & code organisation"
+description = "How to structure code and systems so they can keep changing."
+
+  [[section.topic]]
+  title = "Beyond MVC: layered, hexagonal and clean architecture"
+
+  [[section.topic]]
+  title = "Monolith vs microservices (and monorepo vs polyrepo)"
+
+  [[section.topic]]
+  title = "Domain-driven design basics"
+
+  [[section.topic]]
+  title = "Feature flags"
+
+  [[section.topic]]
+  title = "Multi-tenancy patterns"
+
+[[section]]
+title = "Containers, CI/CD & operations"
+description = "Getting code to production safely, quickly and repeatably."
+
+  [[section.topic]]
+  title = "From Docker to Compose, Swarm and Kubernetes"
+
+  [[section.topic]]
+  title = "CI/CD pipelines and the hotfix problem"
+
+  [[section.topic]]
+  title = "Deployment strategies and zero-downtime database migrations"
+
+  [[section.topic]]
+  title = "Infrastructure as code (Terraform, OpenTofu, Pulumi)"
+
+  [[section.topic]]
+  title = "Secrets management"
+
+  [[section.topic]]
+  title = "The twelve-factor app"
+
+[[section]]
+title = "Observability"
+description = "Knowing what production is doing, and why."
+
+  [[section.topic]]
+  title = "Logs, metrics and traces; SLIs, SLOs and error budgets"
+
+  [[section.topic]]
+  title = "Incident response and blameless postmortems"
+
+  [[section.topic]]
+  title = "Profiling and performance debugging"
+
+[[section]]
+title = "Security"
+description = "Protecting users and their data."
+
+  [[section.topic]]
+  title = "Authentication: passwords, sessions vs JWT, CSRF"
+
+  [[section.topic]]
+  title = "OAuth 2.0 and OpenID Connect"
+
+  [[section.topic]]
+  title = "Authorization models: RBAC, ABAC, ReBAC"
+
+  [[section.topic]]
+  title = "OWASP Top 10 for backend developers"
+
+[[section]]
+title = "Case studies & practice"
+description = "How real companies solved real problems, and classic design exercises."
+
+  [[section.topic]]
+  title = "How Discord stores trillions of messages"
+
+  [[section.topic]]
+  title = "Design a URL shortener"
+
+  [[section.topic]]
+  title = "Design a news feed"
+
+  [[section.topic]]
+  title = "Design a notification system"

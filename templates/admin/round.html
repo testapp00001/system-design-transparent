@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block content %}
+<nav class="breadcrumb" aria-label="Breadcrumb"><a href="/admin">Admin</a> <span aria-hidden="true">/</span> Round #{{ block.round.id }}</nav>
+<header class="page-header round-head">
+  <div>
+    <h1>{{ block.round.title }}</h1>
+    <p class="muted">{{ block.round.time_label() }} · {{ block.round.suggestion_count }} visible suggestions · <a href="/vote/rounds/{{ block.round.id }}">public page</a></p>
+  </div>
+  {% if block.round.is_open() %}
+  <form method="post" action="/admin/rounds/{{ block.round.id }}/close">
+    <button type="submit" class="btn btn-danger">Close now &amp; pick winners</button>
+  </form>
+  {% endif %}
+</header>
+
+{% if let Some(err) = error %}<p class="alert alert-error" role="alert">{{ err }}</p>{% endif %}
+
+<datalist id="post-slugs">
+  {% for slug in post_slugs %}<option value="{{ slug }}">{% endfor %}
+</datalist>
+
+{% for pv in block.polls %}
+<section class="panel">
+  <h2>#{{ pv.poll.tag_slug }} <span class="muted">{{ pv.poll.tag_name }}</span></h2>
+  {% if pv.suggestions.is_empty() %}<p class="muted">No suggestions.</p>{% endif %}
+  <ol class="admin-suggestions">
+    {% for s in pv.suggestions %}
+    <li class="{% if s.is_hidden %}is-hidden{% endif %}">
+      <div class="admin-suggestion-main">
+        <b>▲ {{ s.vote_count }}</b> {{ s.title }}
+        {% if s.is_leader %}<span class="badge">{% if pv.open %}Leading{% else %}Winner{% endif %}</span>{% endif %}
+        {% if s.is_hidden %}<span class="badge badge-muted">hidden</span>{% endif %}
+        {% if !s.details.is_empty() %}<p class="suggestion-details">{{ s.details }}</p>{% endif %}
+      </div>
+      <div class="admin-actions">
+        <form method="post" action="/admin/suggestions/{{ s.id }}/hidden">
+          <input type="hidden" name="hidden" value="{% if s.is_hidden %}0{% else %}1{% endif %}">
+          <button type="submit" class="btn btn-ghost btn-sm">{% if s.is_hidden %}Unhide{% else %}Hide{% endif %}</button>
+        </form>
+        <form method="post" action="/admin/suggestions/{{ s.id }}/fulfill" class="inline-fields">
+          <input type="hidden" name="round_id" value="{{ block.round.id }}">
+          <label class="sr-only" for="fulfill-{{ s.id }}">Answered by post slug</label>
+          <input id="fulfill-{{ s.id }}" name="post_slug" list="post-slugs" placeholder="answered by post slug…"
+                 value="{% if let Some(slug) = s.fulfilled_slug %}{{ slug }}{% endif %}">
+          <button type="submit" class="btn btn-ghost btn-sm">Link</button>
+        </form>
+      </div>
+    </li>
+    {% endfor %}
+  </ol>
+</section>
+{% endfor %}
+{% endblock %}

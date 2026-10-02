@@ -1,0 +1,44 @@
+[package]
+name = "system-design-transparent"
+version = "0.1.0"
+edition = "2024"
+description = "An open, community-driven knowledge base about how real backends and systems are built."
+license = "MIT"
+rust-version = "1.94"
+
+[dependencies]
+anyhow = "1.0.104"
+argon2 = "0.6.0"
+askama = "0.16.1"
+axum = "0.8.9"
+axum-extra = { version = "0.12.6", features = ["cookie", "form"] }
+chrono = { version = "0.4.45", features = ["serde"] }
+dotenvy = "0.15.7"
+hex = "0.4.3"
+pulldown-cmark = "0.13.4"
+rand = "0.10.3"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+sha2 = "0.11.0"
+sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "postgres", "chrono", "migrate", "macros"] }
+thiserror = "2.0.21"
+time = "0.3"
+tokio = { version = "1.53.1", features = ["full"] }
+toml = "1.1.6"
+tower = "0.5.3"
+tower-http = { version = "0.7.1", features = ["fs", "trace", "compression-gzip", "set-header"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+walkdir = "2.5.0"
+
+[dev-dependencies]
+http-body-util = "0.1.5"
+
+[profile.dev.package.argon2]
+# Password hashing is deliberately slow; unoptimised it makes tests crawl.
+opt-level = 3
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true

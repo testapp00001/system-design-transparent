@@ -1,0 +1,17 @@
+<article class="card">
+  <div class="card-meta">
+    <span class="level level-{{ card.level }}">{{ card.level }}</span>
+    <span>{{ card.reading_minutes }} min read</span>
+    <span>{{ card.date }}</span>
+  </div>
+  <h2 class="card-title"><a href="/posts/{{ card.slug }}">{{ card.title }}</a></h2>
+  <p class="card-summary">{{ card.summary }}</p>
+  {% if let Some(snippet) = card.headline %}<p class="card-snippet">…{{ snippet|safe }}…</p>{% endif %}
+  <div class="card-foot">
+    <div class="tags">{% for t in card.tags %}<a class="tag" href="/?tag={{ t }}">#{{ t }}</a>{% endfor %}</div>
+    <div class="counts">
+      <span title="Upvotes"><span aria-hidden="true">▲</span> {{ card.upvote_count }}<span class="sr-only"> upvotes</span></span>
+      <span title="Likes"><span aria-hidden="true">♥</span> {{ card.like_count }}<span class="sr-only"> likes</span></span>
+    </div>
+  </div>
+</article>

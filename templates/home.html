@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block content %}
+{% if show_hero %}
+<section class="hero">
+  <p class="eyebrow">Open, free, community-written</p>
+  <h1>Learn how real backends work — <span class="accent">without needing to be lucky.</span></h1>
+  <p class="lead">
+    Connection pools, idempotency keys, replication, zero-downtime deploys, scaling WebSockets…
+    Most engineers only meet these if their company already uses them. This site writes that
+    knowledge down for everyone: clear explanations, real trade-offs, no course to buy.
+  </p>
+  <div class="hero-actions">
+    <a class="btn" href="/roadmap">Explore the roadmap</a>
+    <a class="btn btn-ghost" href="/vote">Vote on the next topic</a>
+  </div>
+</section>
+{% endif %}
+
+{% for round in open_rounds %}
+<a class="round-banner" href="/vote">
+  <span class="round-banner-icon" aria-hidden="true">🗳</span>
+  <span><b>Voting is open</b> for {{ round.tag_names|join(", ") }} — {{ round.time_label() }}.
+  Tell us what to write next →</span>
+</a>
+{% endfor %}
+
+<form class="search" action="/" method="get" role="search"
+      hx-get="/" hx-target="#results" hx-swap="outerHTML" hx-push-url="true" hx-include="closest form">
+  <div class="search-field">
+    <label class="sr-only" for="q">Search articles</label>
+    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+    <input id="q" type="search" name="q" value="{{ filter.q }}" autocomplete="off"
+           placeholder="Search: idempotency, b-tree, websocket, replication…"
+           hx-get="/" hx-trigger="input changed delay:300ms, search">
+  </div>
+  <div class="search-filters">
+    <label class="sr-only" for="f-tag">Tag</label>
+    <select id="f-tag" name="tag" hx-get="/" hx-trigger="change">
+      <option value="">All tags</option>
+      {% for t in tags %}
+      <option value="{{ t.slug }}" {% if t.slug == filter.tag %}selected{% endif %}>{{ t.name }} ({{ t.post_count }})</option>
+      {% endfor %}
+    </select>
+    <label class="sr-only" for="f-level">Level</label>
+    <select id="f-level" name="level" hx-get="/" hx-trigger="change">
+      <option value="">Any level</option>
+      <option value="beginner" {% if filter.level == "beginner" %}selected{% endif %}>Beginner</option>
+      <option value="intermediate" {% if filter.level == "intermediate" %}selected{% endif %}>Intermediate</option>
+      <option value="advanced" {% if filter.level == "advanced" %}selected{% endif %}>Advanced</option>
+    </select>
+    <label class="sr-only" for="f-sort">Sort</label>
+    <select id="f-sort" name="sort" hx-get="/" hx-trigger="change">
+      {% for choice in filter.sort_choices %}
+      <option value="{{ choice.value }}" {% if choice.selected %}selected{% endif %}>{{ choice.label }}</option>
+      {% endfor %}
+    </select>
+    <noscript><button type="submit" class="btn btn-sm">Search</button></noscript>
+  </div>
+</form>
+
+<div class="tag-row" aria-label="Popular tags">
+  {% for t in tags %}{% if loop.index <= 14 && t.post_count > 0 %}
+  <a class="chip {% if t.slug == filter.tag %}chip-active{% endif %}" href="/?tag={{ t.slug }}">#{{ t.slug }}</a>
+  {% endif %}{% endfor %}
+  <a class="chip chip-more" href="/tags">All tags →</a>
+</div>
+
+{% include "partials/results.html" %}
+{% endblock %}

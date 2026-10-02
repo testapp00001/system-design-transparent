@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="post-layout">
+  <article class="post">
+    <header class="post-header">
+      <nav class="breadcrumb" aria-label="Breadcrumb">
+        <a href="/">Articles</a>
+        {% if let Some(first) = post.tags.first() %}<span aria-hidden="true">/</span> <a href="/?tag={{ first }}">#{{ first }}</a>{% endif %}
+      </nav>
+      <h1>{{ post.title }}</h1>
+      <p class="post-summary">{{ post.summary }}</p>
+      <div class="post-meta">
+        <span class="level level-{{ post.level }}">{{ post.level }}</span>
+        <span>{{ post.reading_minutes }} min read</span>
+        <span>Published {{ post.published }}</span>
+        {% if let Some(updated) = post.updated %}<span>Updated {{ updated }}</span>{% endif %}
+        <a class="jump-react" href="#reactions"><span aria-hidden="true">▲</span> {{ reactions.state.upvote_count }} · <span aria-hidden="true">♥</span> {{ reactions.state.like_count }}</a>
+      </div>
+      <div class="tags">{% for t in post.tags %}<a class="tag" href="/?tag={{ t }}">#{{ t }}</a>{% endfor %}</div>
+    </header>
+
+    {% if !post.toc_html.is_empty() %}
+    <details class="toc toc-inline">
+      <summary>On this page</summary>
+      {{ post.toc_html|safe }}
+    </details>
+    {% endif %}
+
+    <div class="prose">
+      {{ post.body_html|safe }}
+    </div>
+
+    <footer class="post-footer">
+      <p class="post-footer-q">Was this useful?</p>
+      {% include "partials/reactions.html" %}
+      <p class="edit-hint">
+        Spotted a mistake, or know something that should be here?
+        <a href="{{ edit_url }}" rel="noopener">Improve this page on GitHub</a> — every article is a Markdown file anyone can edit.
+      </p>
+    </footer>
+  </article>
+
+  {% if !post.toc_html.is_empty() %}
+  <aside class="post-aside">
+    <nav class="toc toc-side" aria-label="On this page">
+      <p class="toc-title">On this page</p>
+      {{ post.toc_html|safe }}
+    </nav>
+  </aside>
+  {% endif %}
+</div>
+
+{% if !related.is_empty() %}
+<section class="related">
+  <h2>Keep reading</h2>
+  <div class="card-grid">
+    {% for card in related %}{% include "partials/card.html" %}{% endfor %}
+  </div>
+</section>
+{% endif %}
+{% endblock %}

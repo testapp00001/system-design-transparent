@@ -1,0 +1,40 @@
+# Local stack: `docker compose up --build`, then open http://localhost:3000
+# Make yourself an admin after registering on the site:
+#   docker compose exec app app make-admin <your-username>
+
+services:
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: sdt
+      POSTGRES_PASSWORD: sdt
+      POSTGRES_DB: sdt
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sdt -d sdt"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    # Only reachable from this machine, for psql / GUI clients.
+    ports:
+      - "127.0.0.1:5432:5432"
+
+  app:
+    build: .
+    depends_on:
+      db:
+        # Wait until Postgres accepts connections, not just until it started.
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://sdt:sdt@db:5432/sdt
+      IP_HASH_SECRET: change-me-in-production
+      PUBLIC_URL: http://localhost:3000
+      TRUSTED_PROXY_HOPS: "0"
+      COOKIE_SECURE: "false"
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
+
+volumes:
+  pgdata:
