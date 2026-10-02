@@ -24,9 +24,9 @@ TLS certificate that expires tonight). A bug that can wait for the next sprint i
 it is a ticket.
 
 When in doubt, **declare it**. Closing a small incident costs almost nothing; starting to organise two
-hours into a growing outage costs a lot. The Google SRE book suggests a simple test: it is an incident
-if you need a second team, if customers can see the problem, or if it is unsolved after an hour of
-focused work.
+hours into a growing outage costs a lot. The Google SRE book (chapter "Managing Incidents") suggests a
+simple test: it is an incident if *any* of these is true: you need a second team to fix it, customers
+can see the problem, or it is still unsolved after an hour of focused work.
 
 ## Severity levels
 
@@ -46,9 +46,10 @@ fails" is. If unsure, pick the higher level; do not debate it while users are af
 
 ## Roles: who does what
 
-The most useful idea here comes from emergency services: the **Incident Command System**, developed by
-US firefighters. The Google SRE book's chapter "Managing Incidents" describes how Google adapted it for
-software. The key idea: **separate the roles, and put one person in charge**.
+The most useful idea here comes from emergency services: the **Incident Command System** (ICS),
+developed by US firefighters to manage large wildfires. The Google SRE book's chapter "Managing
+Incidents" explains that Google's own incident process is based on it. The key idea: **separate the
+roles, and put one person in charge**.
 
 ```text
                       +-------------------------------+
@@ -75,6 +76,11 @@ software. The key idea: **separate the roles, and put one person in charge**.
   fixing things are not interrupted.
 - **Scribe**: records what happens. In small incidents the IC or comms lead does this too.
 
+Role names differ between companies. For example, the SRE book also describes a **planning** role
+(longer-term work such as filing bugs and arranging handovers), and PagerDuty's public incident
+response documentation describes a scribe. The names matter less than the rule: everyone knows who
+does what.
+
 In a small team, the first responder holds every role until a second person joins. Then split: one
 coordinates, the other fixes. Hand over roles out loud: "Ana, you are now IC."
 
@@ -82,7 +88,8 @@ coordinates, the other fixes. Hand over roles out loud: "Ana, you are now IC."
 
 Engineers naturally want to know *why* something broke. Resist this at first. The first goal is
 **mitigation**: reducing the harm to users as fast as possible, even before you understand the cause.
-The SRE book's chapter "Effective Troubleshooting" gives the same advice.
+The SRE book's chapter "Effective Troubleshooting" gives the same advice: make the system work as well
+as it can first, and look for the root cause after.
 
 Most incidents start with a change: a deploy, a config edit, a feature flag, a traffic spike, an expired
 certificate. So ask **"what changed?"**, then choose the fastest safe action:
@@ -91,7 +98,7 @@ certificate. So ask **"what changed?"**, then choose the fastest safe action:
 |---|---|---|
 | **Roll back** the last deploy | It started after a release | Database migrations must work with the old code |
 | **Turn off a feature flag** | The new code is behind a flag | Only covers flagged code |
-| **Fail over** to a replica or region | One database or zone is unhealthy | Replication lag can lose recent writes |
+| **Fail over** to a replica or region | One database or zone is unhealthy | With asynchronous replication, recent writes can be lost |
 | **Add capacity** | Real load is too high | Does not fix a bug that burns CPU |
 | **Shed load** (rate limit, block bad traffic) | Overload or one abusive client | Some users get errors on purpose |
 | **Restart** a bad instance | One instance misbehaves | Destroys evidence; save logs first |
@@ -101,8 +108,8 @@ Details are in other articles: [rollbacks and hotfixes](/posts/ci-cd-and-hotfixe
 [rate limiting](/posts/rate-limiting) and [load shedding](/posts/resilience-patterns).
 
 > [!TIP]
-> If a deploy went out shortly before the problem started, roll it back first and ask questions
-> later. An unnecessary rollback costs minutes; a slow diagnosis while users suffer costs hours.
+> If a deploy went out shortly before the problem started, and rolling back is safe, roll it back
+> first and ask questions later. An unnecessary rollback costs minutes; a slow diagnosis while users suffer costs hours.
 
 Announce each action *before* you take it, and change one thing at a time when you can, or you will
 not know which change helped.
@@ -178,8 +185,11 @@ person hides their mistake, and you lose the information you need to improve. Be
 Allspaw described this approach at Etsy in his 2012 article "Blameless PostMortems and a Just Culture",
 and the SRE book's chapter "Postmortem Culture: Learning from Failure" describes Google's version.
 
-Typical triggers: user-visible downtime above a threshold, any data loss, a manual intervention such
-as a rollback, or a problem found by a user instead of by monitoring. A simple template:
+When to write one? Decide the rules before incidents happen. The SRE book's postmortem chapter lists
+triggers like these: user-visible downtime or slowness above a threshold, any data loss, a manual
+intervention by the on-call engineer (such as a rollback), a resolution that took longer than a set
+time, or a monitoring failure (for example, a user found the problem before your alerts did). A simple
+template:
 
 ```markdown
 # Postmortem: checkout errors on 2026-10-02 (SEV2)       Owner: Tom
@@ -235,7 +245,7 @@ A postmortem without completed action items is a story, not an improvement.
 | Weak | Strong |
 |---|---|
 | "Be more careful with queries" | "Fill the staging database with production-sized data" |
-| "Improve monitoring" | "Alert when p99 query time is above 500 ms for 5 minutes" |
+| "Improve monitoring" | "Alert when p99 query time (99% of queries are faster than this) is above 500 ms for 5 minutes" |
 | 20 items nobody owns | 3 to 5 items, each with one owner, a ticket and a due date |
 
 Give each item **one owner** (a person, not a team) and a ticket in your normal tracker. Mix types:
@@ -250,8 +260,9 @@ decisions, and eventually leaves.
 
 - **Every page needs action.** If the right response is "ignore it", fix or delete the alert. Alert on
   user symptoms (errors, latency); see [observability](/posts/observability-logs-metrics-traces).
-- **Limit the load.** The SRE book's chapter "Being On-Call" explains that an incident plus its
-  follow-up work takes hours, and sets a target of at most about two incidents per 12-hour shift.
+- **Limit the load.** The SRE book's chapter "Being On-Call" says that, in Google's experience, one
+  incident plus its follow-up work (analysis, fixes, postmortem) takes about six hours on average.
+  So it sets a maximum of two incidents per 12-hour on-call shift.
 - **Runbooks** (short how-to pages for each alert) let anyone respond, not only the expert.
 - **Recovery**: time off after a bad night. Escalating early is good judgement, not weakness.
 
@@ -259,15 +270,17 @@ decisions, and eventually leaves.
 
 Reading other companies' published postmortems is a cheap way to learn how real systems fail:
 
-- **GitLab, January 2017.** While fixing a replication problem, an engineer deleted the data directory
-  on the primary database server instead of the secondary. Several backup methods turned out not to be
-  working, and GitLab lost roughly six hours of database data. Lesson: a backup you have never restored
+- **GitLab, January 2017.** While fixing a replication problem, an engineer deleted the PostgreSQL
+  data directory on the primary database server instead of on the secondary (the replica). Several
+  backup methods turned out not to be working, and GitLab lost roughly six hours of database data. Lesson: a backup you have never restored
   is not a backup (see [database backups and recovery](/posts/database-backups-and-recovery)).
 - **Amazon S3, February 2017.** AWS reported that a command meant to remove a small number of servers
-  was entered incorrectly and removed many more. Lesson: tools should limit how much one command can do.
-- **Cloudflare, July 2019.** Cloudflare described how a firewall rule with a badly behaving regular
-  expression used up CPU across its network, partly because such rule changes went out everywhere at
-  once. Lesson: configuration changes need staged rollouts, just like code.
+  had one input entered incorrectly, so a larger set of servers was removed than intended. Lesson:
+  tools should limit how much one command can do.
+- **Cloudflare, July 2019.** Cloudflare described how a new web application firewall (WAF) rule contained a regular
+  expression that needed far too much CPU, and how this used up CPU across its network, partly because
+  such rule changes went out everywhere at once. Lesson: configuration changes need staged rollouts,
+  just like code.
 
 ## Common mistakes
 
@@ -285,6 +298,7 @@ Reading other companies' published postmortems is a cheap way to learn how real 
   [Example Postmortem](https://sre.google/sre-book/example-postmortem/)
 - Google SRE Workbook: [Incident Response](https://sre.google/workbook/incident-response/)
 - PagerDuty: [Incident Response documentation](https://response.pagerduty.com/)
-- GitLab: [Postmortem of database outage of January 31](https://about.gitlab.com/blog/2017/02/10/postmortem-of-database-outage-of-january-31/)
+- John Allspaw (Etsy): [Blameless PostMortems and a Just Culture](https://www.etsy.com/codeascraft/blameless-postmortems)
+- GitLab: [Postmortem of database outage of January 31](https://about.gitlab.com/blog/postmortem-of-database-outage-of-january-31/)
 - Richard Cook: [How Complex Systems Fail](https://how.complexsystems.fail/)
 - Dan Luu: [a collection of public postmortems](https://github.com/danluu/post-mortems)

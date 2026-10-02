@@ -109,19 +109,28 @@ spec:
 ```
 
 - Utilisation is measured against the pod's CPU **request** (the CPU the scheduler reserves for it).
-  Without requests, the HPA cannot compute it.
-- CPU and memory metrics come from the **metrics-server** add-on. For other metrics you need an
-  adapter (such as the Prometheus Adapter) or KEDA (below).
+  If a container in the pod has no CPU request, the HPA cannot compute utilisation and takes no
+  action for that metric.
+- Without a `behavior` block, the HPA may add up to 100% more pods (or 4 pods, if that is more) every
+  15 seconds. For scale-down it uses the 5-minute window, then may remove all extra pods at once. The
+  policies above slow scale-up to "at most double per minute" and scale-down to 2 pods per minute.
+  Check that your scale-up limit is not slower than your traffic can grow.
+- CPU and memory metrics usually come from the **metrics-server** add-on. For other metrics you need
+  an adapter (such as the Prometheus Adapter) or KEDA (below).
 - Remove `replicas` from the Deployment manifest. Otherwise every `kubectl apply` resets the count the
-  HPA chose.
+  HPA chose. Be careful: if you simply delete the field and apply, Kubernetes can drop the Deployment
+  to 1 replica (the default) once. The Kubernetes HPA documentation explains how to remove it safely.
 
 ### Vertical Pod Autoscaler (VPA)
 
 The VPA is not part of core Kubernetes; you install it from the `kubernetes/autoscaler` project. It
 watches real usage and recommends CPU and memory **requests**. Its modes range from `Off` (only
-recommend) to modes that evict pods so they restart with new values. Many teams run it in `Off` mode
-and copy its recommendations by hand. Never let the HPA and VPA both act on CPU or memory for the
-same workload: each changes the number the other reacts to, so they fight.
+recommend) and `Initial` (set requests only when a pod is created) to modes that change running pods:
+`Recreate` evicts pods so they restart with new values, and newer versions can also resize pods in
+place. Many teams run it in `Off` mode and copy its recommendations by hand. Do not let the HPA and the
+VPA act on the **same** resource (CPU or memory) for the same workload: each changes the number the
+other reacts to, so they fight. The VPA project documents this limitation; using the VPA for memory
+and the HPA for CPU, or the HPA on custom metrics, is allowed.
 
 ### Cluster Autoscaler and Karpenter
 
@@ -142,13 +151,15 @@ The HPA adds pods, but pods need **nodes** (machines). When no node has room, ne
 ```
 
 - **Cluster Autoscaler** (also from `kubernetes/autoscaler`) grows and shrinks predefined **node
-  groups**, such as AWS Auto Scaling groups. It removes a node when its pods fit elsewhere and it has
-  been underused for a while (10 minutes by default).
-- **Karpenter**, originally built by AWS, creates nodes directly, picks instance types that fit the
-  pending pods, and **consolidates** pods onto fewer or cheaper nodes.
+  groups**, such as AWS Auto Scaling groups. By default, it removes a node when the pods on it request
+  less than half of the node's capacity, those pods fit on other nodes, and this has been true for 10
+  minutes.
+- **Karpenter**, originally built by AWS and now also available for other clouds, creates nodes
+  directly (not through node groups), picks instance types that fit the pending pods, and
+  **consolidates** pods onto fewer or cheaper nodes.
 
 Both decide from pod **requests**, not real usage. Requests far too high waste money; far too low,
-and too many pods share one node.
+and too many pods share one node, so they slow each other down or run out of memory.
 
 ## Virtual machines: auto scaling groups
 
@@ -157,8 +168,9 @@ instance groups** and Azure **Virtual Machine Scale Sets**. You provide a templa
 **maximum** and **desired** size. The group replaces unhealthy instances and runs your policies. On
 AWS, **target tracking** ("keep average CPU at 50%") is the usual start; **step scaling** adds more
 instances the further a metric is past a threshold. An **instance warm-up** setting stops a new
-instance's metrics from counting before it has started properly, and **lifecycle hooks** let an
-instance drain connections before it is terminated.
+instance's metrics from counting before it has started properly, and **lifecycle hooks** pause an
+instance before it is terminated, so it can finish its work (for example, drain connections or upload
+logs).
 
 ## The scale-out delay, and why you need headroom
 
@@ -198,14 +210,15 @@ empties caches. The fixes add **patience** to the loop:
 - **Tolerance**: ignore small differences from the target.
 - **Stabilisation window**: before scaling down, take the highest recommendation of the last N
   minutes. The HPA uses 5 minutes for scale-down by default, and no window for scale-up.
-- **Cooldown**: wait after a scaling action before the next one. AWS simple scaling policies default
-  to 300 seconds.
+- **Cooldown**: wait after a scaling action before the next one. On AWS, simple scaling policies use a
+  default cooldown of 300 seconds; AWS now recommends target tracking or step scaling instead, which
+  rely on instance warm-up rather than cooldowns.
 - **Asymmetry**: scale out fast, scale in slowly. Spare capacity costs a little money; missing
   capacity costs errors.
 
 Scaling in is a small deploy. Handle `SIGTERM`, stop taking new work, finish in-flight requests, then
-exit. In Kubernetes, a **PodDisruptionBudget** limits how many pods a node autoscaler may evict at
-once.
+exit. In Kubernetes, a **PodDisruptionBudget** limits how many pods of one application may be down at
+the same time during planned evictions, such as when a node autoscaler removes a node.
 
 ## Scheduled and predictive scaling
 
@@ -224,8 +237,8 @@ Both raise the floor; keep reactive scaling for surprises.
 A nightly report worker or a staging environment is idle most of the day. Running zero instances
 while idle saves money.
 
-- **KEDA** (Kubernetes Event-driven Autoscaling) scales a Deployment from 0 to 1 when an event source
-  has work (a queue, a Kafka topic, a Prometheus query), and creates an HPA for 1 to N. No messages,
+- **KEDA** (Kubernetes-based Event Driven Autoscaling) scales a Deployment from 0 to 1 when an event
+  source has work (a queue, a Kafka topic, a Prometheus query), and creates an HPA for 1 to N. No messages,
   no pods.
 - **HTTP scale-to-zero** needs something to hold the first request while an instance starts: Knative
   Serving's activator, the KEDA HTTP add-on, or serverless platforms such as AWS Lambda and Google
@@ -250,7 +263,8 @@ The autoscaler opens the most connections exactly when the database is busiest. 
 the real bottleneck, more app instances only send more queries to it, and everything gets slower.
 
 - Derive `maxReplicas` from the downstream budget: replicas × pool size must stay below the
-  connections the database allows **for this service**.
+  connections the database allows **for this service**. Leave room for rolling deploys, when old and
+  new pods run at the same time.
 - Use small pools and an external pooler such as PgBouncer (see
   [connection pooling](/posts/connection-pooling)).
 - Remember rate-limited third-party APIs and other internal services.
@@ -306,7 +320,7 @@ and no alert at the maximum.
 
 ## Further reading
 
-- Kubernetes docs: [Horizontal Pod Autoscaling](https://kubernetes.io/docs/tasks/run-application/horizontal-pod-autoscale/)
+- Kubernetes docs: [Horizontal Pod Autoscaling](https://kubernetes.io/docs/concepts/workloads/autoscaling/horizontal-pod-autoscale/)
 - [kubernetes/autoscaler](https://github.com/kubernetes/autoscaler): Cluster Autoscaler and Vertical Pod Autoscaler, with their FAQs
 - [Karpenter documentation](https://karpenter.sh/)
 - [KEDA documentation](https://keda.sh/)

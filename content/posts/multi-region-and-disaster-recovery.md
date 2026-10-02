@@ -111,7 +111,8 @@ while it scales up, and you can test it all the time.
 and the hardest, because writes from several regions must be reconciled (see below). Capacity rule:
 with N equal regions, each should normally use at most (N-1)/N of its capacity, so the survivors can
 absorb a lost region: 50% with two regions, 75% with four. Planning to [autoscale](/posts/autoscaling)
-instead? Other customers of the failed region may be doing the same.
+instead? Other customers of the failed region may be trying to scale up in the same surviving regions
+at the same time, so capacity there can run short.
 
 ## Getting the data there: replication and its lag
 
@@ -131,13 +132,16 @@ SELECT application_name, state, replay_lag FROM pg_stat_replication;
 SELECT now() - pg_last_xact_replay_timestamp() AS since_last_replayed_commit;
 ```
 
-The second value also grows when the primary is idle; a heartbeat row updated every few seconds fixes
-that.
+The second value also grows when the primary is idle, because no new commits arrive. A heartbeat
+fixes that: a job on the primary updates one row with the current time every few seconds, and on the
+replica the lag is roughly `now()` minus that replicated time (this assumes the servers' clocks are
+in sync).
 
 The alternative is **synchronous** cross-region writes, where a commit succeeds only once other regions
 have it. Google Spanner and CockroachDB do this with consensus
-([consensus and leader election](/posts/consensus-and-leader-election)). Committed data survives a
-region failure, but every write pays cross-region round trips.
+([consensus and leader election](/posts/consensus-and-leader-election)). When the replicas are placed
+so that a majority survives the loss of one region (this is a configuration choice, not automatic),
+committed data survives a region failure. The price: every write pays cross-region round trips.
 
 Remember data outside the main database:
 
@@ -166,7 +170,7 @@ When a region fails, traffic must move. Three mechanisms are common, often combi
   announcing, routers send traffic elsewhere, with no DNS cache involved.
 - **Global load balancers.** Google Cloud's global external Application Load Balancer, AWS Global
   Accelerator, Azure Front Door and Cloudflare Load Balancing give one stable entry point that
-  health-checks your regions and forwards requests to a healthy one. Failover then happens inside the
+  health-checks your regions and forwards traffic to a healthy one. Failover then happens inside the
   provider, without waiting for DNS caches.
 
 Health checks decide everything, so check from **several outside locations**, test something
@@ -186,11 +190,11 @@ Reads are easy to serve everywhere. Writes are not:
 
 The usual answers:
 
-- **Last write wins (LWW):** keep the later timestamp. DynamoDB global tables use it, and so does Azure
-  Cosmos DB by default. It silently drops the other write, and "later" depends on clocks that are never
+- **Last write wins (LWW):** keep the later timestamp. DynamoDB global tables use it in their
+  classic, eventually consistent mode, and Azure Cosmos DB uses it by default for multi-region writes. It silently drops the other write, and "later" depends on clocks that are never
   perfectly in sync ([clocks and ordering](/posts/ids-clocks-and-ordering)).
 - **A home region per record:** each user or tenant "lives" in one region, which receives all its
-  writes. One writer per record means no conflicts. This is the most common practical design, and it
+  writes. One writer per record means no conflicts. This is a common practical design, and it
   helps with data-residency rules. On failover, the home moves.
 - **Conflict-free data:** append-only logs, sets, counters and CRDTs merge concurrent changes
   automatically ([collaborative editing](/posts/collaborative-editing-ot-crdt)).
@@ -206,14 +210,16 @@ Theory: [CAP and consistency models](/posts/cap-theorem-and-consistency-models).
 Two perfect regions can still fail together because of something both depend on:
 
 - **DNS provider.** In October 2016, a large DDoS attack on the DNS provider Dyn made many well-known
-  websites unreachable for hours. Some companies now use two DNS providers.
+  websites unreachable for many users, on and off for several hours. Some companies now use two DNS providers.
 - **Identity provider.** If engineers reach the cloud console and servers only through single sign-on,
   and it is down, nobody can fail over. Keep tested **break-glass accounts**: emergency credentials
   stored safely and used only in emergencies.
 - **Cloud control planes.** The *control plane* is the API that creates and changes resources; the
   *data plane* serves traffic from resources that already exist. Control planes can be impaired or
-  flooded during large events. AWS's resilience guidance recommends that recovery rely on the data
-  plane, which favours warm standby over pilot light for strict RTOs.
+  flooded during large events. AWS's resilience guidance recommends relying on the data plane, not
+  the control plane, during recovery. This is one reason to prefer warm standby over pilot light for
+  strict RTOs: a warm standby can serve some traffic at once without creating anything, while pilot
+  light must first create or start servers. (Scaling the standby up still needs the control plane.)
 - **CI/CD and artifacts.** A pipeline or container registry only in the failed region means no fixes
   and no new servers ([CI/CD](/posts/ci-cd-and-hotfixes)).
 - **Secrets and keys.** Keys only in the dead region mean the standby cannot start and encrypted
@@ -221,7 +227,7 @@ Two perfect regions can still fail together because of something both depend on:
 - **Monitoring and global config.** Monitoring in the failed region goes dark when you need it. A bad
   config pushed to every region at once breaks them all; roll out region by region.
 
-Meta has described how, in its October 2021 outage, a network maintenance mistake disconnected its
+Meta has described how, in its October 4, 2021 outage, a network maintenance mistake disconnected its
 data centers and the internal tools needed for the fix became unreachable too, so engineers had to go
 to data centers in person. Recovery paths must work when everything else is broken.
 
@@ -244,14 +250,15 @@ response](/posts/incident-response-and-postmortems).
 
 Automate the *steps*, but think hard before automating the *decision* to leave a region. GitHub's 2018
 post-incident analysis describes how a network interruption of under a minute triggered an automatic
-database failover to its other US coast. Writes then existed on both sides, and the site was degraded
-for about a day while data was reconciled.
+database failover from its US East Coast data center to the US West Coast. Each coast then
+held some writes that the other did not have, and the site was degraded for about a day while the team
+restored consistent data.
 
 ## When single-region multi-AZ is enough
 
 Often. Region-wide outages are uncommon compared with failures we cause ourselves: Google's SRE book
-estimates that roughly 70% of outages are due to changes in a live system, and a second region does
-not help against a bad deploy pushed to both.
+says its SRE teams found that roughly 70% of outages are due to changes in a live system, and a second
+region does not help against a bad deploy pushed to both.
 
 One region with several zones is usually enough when the business accepts a few hours of downtime in
 a rare regional disaster, no contract or regulator demands more, and the team is small (every region
@@ -284,4 +291,4 @@ infrastructure as code, and a **measured** restore time.
 - GitHub Engineering (2018): [October 21 post-incident analysis](https://github.blog/2018-10-30-oct21-post-incident-analysis/)
 - Meta Engineering (2021): [More details about the October 4 outage](https://engineering.fb.com/2021/10/05/networking-traffic/outage-details/)
 - Google SRE Book: [Introduction](https://sre.google/sre-book/introduction/) (see "Change Management")
-- Martin Kleppmann, *Designing Data-Intensive Applications*, chapter 5 (multi-leader replication)
+- Martin Kleppmann, *Designing Data-Intensive Applications* (first edition), chapter 5 "Replication" (multi-leader replication and conflicts)

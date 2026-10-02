@@ -180,9 +180,9 @@ The wait before `SIGKILL` is configurable. In Kubernetes it is `terminationGrace
 - **Don't:** spend minutes warming caches at startup.
 
 > [!NOTE]
-> In a container, your app often runs as process ID 1 (PID 1). Linux gives PID 1 no default
-> `SIGTERM` behaviour: if the app does not handle the signal, nothing happens, and the app only
-> stops at `SIGKILL`, after the whole grace period. Handle `SIGTERM` in code, or run a small init
+> In a container, your app often runs as process ID 1 (PID 1). Linux ignores `SIGTERM` for PID 1
+> unless the program installs a handler for it. So if the app does not handle the signal, nothing
+> happens, and the app only stops at `SIGKILL`, after the whole grace period. Handle `SIGTERM` in code, or run a small init
 > process in front of the app (for example `docker run --init`).
 
 > [!TIP]
@@ -237,22 +237,28 @@ This site's code follows most factors, with a few deliberate exceptions.
   instead of being guessed. A missing `IP_HASH_SECRET` falls back to a development value with a
   logged warning.
 - **Documented, not committed:** `.env.example` documents every variable. The real `.env` is listed in
-  `.gitignore` and `.dockerignore`; in development, `src/main.rs` loads it if it exists.
+  `.gitignore` and `.dockerignore`. `src/main.rs` loads it with the `dotenvy` crate if the file
+  exists, which is handy in development; in a container the file is simply not there. Variables
+  already set in the real environment win over the file.
 - **Build:** the `Dockerfile` is multi-stage, compiles with `cargo build --release --locked`, and
   installs `curl` explicitly because the health check uses it.
 - **Port, logs, shutdown:** the address comes from `BIND_ADDR` (default `0.0.0.0:3000`). Logs go to
-  stdout through the `tracing` library, filtered by `RUST_LOG`. On `SIGTERM` or Ctrl+C, the server
-  stops accepting connections and lets in-flight requests finish.
+  stdout through the `tracing` and `tracing-subscriber` libraries, filtered by `RUST_LOG` (as
+  human-readable text lines, not JSON). On `SIGTERM` or Ctrl+C, the server stops accepting
+  connections and lets in-flight requests finish. The app sets no time limit of its own; the
+  platform's grace period is the limit.
 - **Admin processes:** one-off commands (`make-admin`, `sync-content`) ship in the same binary.
 
-The exceptions: migrations run when the server starts, not as a separate step. Background jobs run
+The exceptions: migrations run when the server starts, not as a separate step (the migration tool
+takes a Postgres advisory lock, so instances that start together do not collide). Background jobs run
 inside the web process (`RUN_BACKGROUND_JOBS=false` turns them off), and jobs that must happen once
 take a Postgres advisory lock so several instances do not repeat them. For a small app, that is a
 reasonable trade-off.
 
 ## Where the manifesto shows its age
 
-The text was written for one platform, years ago. What it skips or simplifies:
+The text was written more than ten years ago, from the experience of one platform. What it skips or
+simplifies:
 
 - **Telemetry.** Logs are only one signal. Today you also expect metrics, traces and health endpoints
   (liveness and readiness checks), often using OpenTelemetry.
@@ -284,7 +290,7 @@ WebSocket connection is state inside one process, so you design for reconnects i
 | Codebase | Can I name the exact commit running in production? |
 | Dependencies | Can a clean CI machine build it from the lockfile alone? |
 | Config | Could I publish the repository today without leaking a secret? |
-| Backing services | Can I switch databases by changing one variable? |
+| Backing services | Can I point the app at another database server by changing one variable? |
 | Build, release, run | Is the production image exactly the one tested in staging? |
 | Processes | Can I kill any instance without users losing data or sessions? |
 | Port binding | Does the app start its own server on a port from config? |
@@ -297,7 +303,7 @@ WebSocket connection is state inside one process, so you design for reconnects i
 ## Common mistakes
 
 - A different image per environment, so what you tested is not what you ship.
-- A missing variable that silently falls back to a default instead of stopping the app.
+- A missing required variable that silently falls back to a default instead of stopping the app.
 - Secrets printed in startup logs "for debugging".
 - Treating the list as complete: an app with no metrics, traces or access control is still hard to run.
 

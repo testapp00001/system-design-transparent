@@ -47,8 +47,10 @@ unreachable, is always "off".
 
 ## Four kinds of flags
 
-Pete Hodgson's article on Martin Fowler's site (linked below) groups flags into four kinds. They
-differ mainly in **who changes them** and **how long they should live**.
+Pete Hodgson's article on Martin Fowler's site (linked below) groups flags into four kinds. He
+compares them by **how long they should live** and by **how dynamic the decision is** (the same
+answer for everyone, or a different answer for each request). In practice, they also differ in
+**who changes them**. The table below is our summary, not a quote from the article.
 
 | Kind | Example | Changed by | Typical lifetime |
 |---|---|---|---|
@@ -123,14 +125,15 @@ Four details matter:
 
 ## Server-side vs client-side evaluation
 
-**Server-side evaluation** happens in your backend. The rules stay private, evaluation is an
+**Server-side evaluation** happens in your backend. The rules stay private, evaluation is usually an
 in-memory lookup, and users cannot tamper with the result. Prefer it.
 
 Browsers and mobile apps often need flag values too, to show or hide UI. Do **not** send them the
 rules: rules can expose unreleased feature names, customer ids and staff email addresses to anyone
 with developer tools. Instead, evaluate on the server and send only the results, such as
-`{"new-checkout": true}`, with the first page or from an endpoint like `/api/me/flags`. Hosted flag
-tools usually offer separate client-side SDKs that work this way.
+`{"new-checkout": true}`, with the first page or from an endpoint like `/api/me/flags`. Many hosted
+flag tools offer client-side SDKs that work this way, but not all of them do. Check what your tool
+sends to the browser.
 
 - **A client-side flag is not a security boundary.** Anyone can change the value in the browser. If
   the flag controls access, prices or limits, the server must check again.
@@ -236,7 +239,7 @@ slowly breaks. An old flag with a vague name is also a trap, as the next section
    row. If you delete the row first, running code falls back to the default (`off`), and the feature
    disappears for everyone.
 4. **Find stale flags automatically.** A flag nobody has evaluated for 30 days, or one stuck at 0%
-   or 100%, is a candidate for removal.
+   or 100% for weeks, is a candidate for removal.
 5. **Never reuse a flag** for a new purpose. Names are free.
 
 ## A cautionary tale: Knight Capital, 2012
@@ -249,16 +252,20 @@ described what happened in an October 2013 order. According to the SEC's finding
   Knight had stopped using Power Peg in 2003, but the code remained and could still be activated by a
   flag. A 2005 change moved the part of the code that tracked how many shares had been filled, and
   Power Peg was not retested afterwards.
-- For a new NYSE program starting on 1 August 2012, Knight wrote new code to replace Power Peg. The
-  new code **reused the flag** that used to activate Power Peg.
-- A technician copied the new code to the servers. **One of the eight servers did not get it**, and
-  no second technician reviewed the deployment.
+- For a new NYSE program starting on 1 August 2012 (the Retail Liquidity Program), Knight wrote new
+  code to replace Power Peg. The new code **reused the flag** that used to activate Power Peg.
+- Knight deployed the new code to its eight order-routing servers in the days before. A technician
+  **did not copy it to one of the eight servers**, and no second technician reviewed the deployment.
 - When trading began, orders carrying the reused flag that reached the eighth server ran the old Power
   Peg code. Without working fill tracking, it kept sending orders to the market.
 - While trying to stop the problem, staff removed the new code from the seven correct servers. That
   made things worse: those servers now also ran Power Peg for flagged orders.
-- In about 45 minutes, this produced about 4 million executions in 154 stocks. The SEC charged
-  Knight with violating its market access rule, and Knight agreed to pay a $12 million penalty.
+- In about 45 minutes, this produced more than 4 million executions in 154 stocks. The SEC charged
+  Knight with violating its market access rule (Rule 15c3-5), which requires firms to have risk
+  controls on the orders they send to the market. Knight agreed to pay a $12 million penalty.
+
+Note that here the "flag" was a value carried by each incoming order, not a switch in a flag
+service. The lessons are the same.
 
 Lessons for anyone who uses flags (our conclusions, not the SEC's):
 
@@ -313,6 +320,6 @@ use_new = client.get_boolean_value("new-checkout", False, ctx)   # False = defau
 
 - Pete Hodgson on martinfowler.com: [Feature Toggles (aka Feature Flags)](https://martinfowler.com/articles/feature-toggles.html)
 - [OpenFeature](https://openfeature.dev/): the specification, SDKs and providers
-- Unleash docs: [Feature flag types](https://docs.getunleash.io/reference/feature-toggle-types) and their expected lifetimes
-- SEC: [Order in the matter of Knight Capital Americas LLC (2013)](https://www.sec.gov/files/litigation/admin/2013/34-70694.pdf)
-- Ron Kohavi, Diane Tang and Ya Xu, *Trustworthy Online Controlled Experiments* (book)
+- Unleash docs: [Feature flags](https://docs.getunleash.io/concepts/feature-flags), including flag types and their expected lifetimes
+- SEC: [Order in the matter of Knight Capital Americas LLC (2013, Release No. 34-70694)](https://www.sec.gov/files/litigation/admin/2013/34-70694.pdf)
+- Ron Kohavi, Diane Tang and Ya Xu, *Trustworthy Online Controlled Experiments: A Practical Guide to A/B Testing* (book)

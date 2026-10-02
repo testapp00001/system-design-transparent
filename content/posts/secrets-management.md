@@ -58,7 +58,8 @@ access control, audit log or rotation. On a single server, a `chmod 600` file ca
 > Rewriting Git history is **not** a fix. Old clones, forks, cached pages and CI logs still have
 > the value. The only real fix is to make the leaked value useless.
 
-1. **Rotate the secret immediately.** Create a new one, deploy it, disable the old one.
+1. **Rotate the secret immediately.** Create a new one, deploy it, disable the old one. If the
+   logs show that someone is using the key right now, disable it first and accept a short outage.
 2. **Check the provider's logs** for use of the old value. Treat it as an
    [incident](/posts/incident-response-and-postmortems), not a cleanup task.
 3. **Then, optionally, clean the history** with `git filter-repo` or BFG Repo-Cleaner. This reduces
@@ -130,8 +131,8 @@ and gives it a signed, short-lived token. No human handles a long-lived credenti
 
 | Tool | Where it runs | Notes |
 |---|---|---|
-| HashiCorp Vault | Self-hosted, or managed by HashiCorp | Very flexible: dynamic secrets, many login methods. Running it yourself is real work. OpenBao is a community fork created after Vault's 2023 license change. |
-| AWS Secrets Manager | AWS | Access via IAM; built-in rotation with Lambda functions |
+| HashiCorp Vault | Self-hosted, or managed by HashiCorp | Very flexible: dynamic secrets, many login methods. Running it yourself is real work. OpenBao is an open-source community fork (under the Linux Foundation) created after Vault's 2023 license change. |
+| AWS Secrets Manager | AWS | Access via IAM; rotation with Lambda functions, or managed rotation for some AWS services |
 | Google Secret Manager | Google Cloud | Access via IAM; versioned secrets; rotation schedules send notifications, you write the rotation code |
 | Azure Key Vault | Azure | Secrets, keys and certificates; apps sign in with managed identities |
 | Infisical, Doppler | Hosted (Infisical is open source and can be self-hosted) | Developer-friendly UI; CLIs inject secrets as environment variables into a command |
@@ -168,10 +169,11 @@ cannot commit a plain Secret. Four common solutions:
 |---|---|
 | [External Secrets Operator](https://external-secrets.io/) | Git holds a *reference* ("read `prod/orders/db` from AWS Secrets Manager"). An operator in the cluster fetches the value and creates a normal Secret. |
 | Secrets Store CSI Driver | Mounts values from an external secret manager into the Pod as files. |
-| [Sealed Secrets](https://github.com/bitnami-labs/sealed-secrets) | `kubeseal` encrypts a Secret with the public key of the Sealed Secrets controller that runs in the cluster. The `SealedSecret` is safe to commit; only that controller has the private key to decrypt it, so back up that key. |
+| [Sealed Secrets](https://github.com/bitnami-labs/sealed-secrets) | `kubeseal` encrypts a Secret with the public key of the Sealed Secrets controller that runs in the cluster. The `SealedSecret` is safe to commit; only that controller has the private keys to decrypt it, so back up those keys. |
 | [SOPS](https://github.com/getsops/sops) | Encrypts the values (not the keys) in YAML, JSON or `.env` files with age, PGP or a cloud KMS. Files are committed encrypted and decrypted at deploy time. |
 
 If you already use a cloud secret manager, External Secrets Operator is usually the simplest choice.
+It still creates normal Secrets in the cluster, so encryption at rest and RBAC still matter.
 
 ## Rotation and short-lived credentials
 
@@ -181,7 +183,7 @@ safe rotation uses an **overlap period**, so the app always has a valid credenti
 
 ```text
 time ------------------------------------------------------------------------>
-old secret:  [ valid ...................................... ] revoked
+old secret:  [ valid ....................................... ] revoked
 new secret:              [ created ] [ deployed, apps switch ] [ only valid one ...
 ```
 
@@ -190,9 +192,11 @@ new secret:              [ created ] [ deployed, apps switch ] [ only valid one 
 2. Deploy it; apps pick it up by restarting or re-reading the file.
 3. Watch for errors, then revoke the old credential.
 
-In PostgreSQL, changing a password does not close existing connections. A
-[connection pool](/posts/connection-pooling) keeps its old connections and uses the new password only
-for new ones, so sessions opened with the old password live on until they close.
+In PostgreSQL, the password is checked only when a connection is opened. Changing it does not close
+existing connections. Connections that a [connection pool](/posts/connection-pooling) opened with the
+old password keep working until they close. This helps during a planned rotation. After a leak it
+is a problem: an attacker's open sessions also stay alive. End them with `pg_terminate_backend()`,
+for example `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE usename = 'app';`.
 
 Even better than rotating a static secret is not having one. **Dynamic secrets** are created on
 demand for one caller and expire automatically. With Vault's database secrets engine, each app
@@ -204,14 +208,18 @@ $ vault read database/creds/orders-readonly
 # When the lease ends, Vault revokes these credentials.
 ```
 
-A leaked dynamic credential is useful for minutes or hours, not years, and each one belongs to a
-single instance, so the audit log shows exactly who used it.
+You choose the lease length (the TTL, "time to live") in the Vault role. Set it short; Vault's
+default is much longer. With a short TTL, a leaked dynamic credential is useful for minutes or
+hours, not years. Each one also belongs to a single instance, so the database username tells you
+exactly which instance used it.
 
 ## No long-lived keys in CI: OIDC federation
 
 The classic CI setup stores a cloud access key in the CI system's secret settings. That key never
-expires, and anyone who can change a workflow can send it somewhere. Log masking only hides exact
-matches; a transformed value (for example base64) is not hidden.
+expires, and anyone who can change a workflow can send it somewhere. Log masking does not save you:
+GitHub, for example, hides the exact value and some common encodings such as base64, but warns that
+this is not guaranteed. A value that is changed in another way, or one part of a secret that holds
+structured data such as JSON, can still appear in the log.
 
 Modern CI systems can instead prove the job's identity with an **OIDC token**: a short-lived JWT
 signed by the CI provider that says "this is repository `my-org/shop`, branch `main`" (see
@@ -230,6 +238,10 @@ GitHub Actions job                         AWS
 ```
 
 ```yaml
+on:
+  push:
+    branches: [main]
+
 permissions:
   id-token: write     # allow this job to request an OIDC token
   contents: read
@@ -238,7 +250,8 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - uses: aws-actions/configure-aws-credentials@v4
+      # ... checkout and build steps that create ./dist ...
+      - uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: arn:aws:iam::123456789012:role/deploy-prod
           aws-region: eu-west-1
@@ -246,13 +259,15 @@ jobs:
 ```
 
 On the AWS side, the role's trust policy must check the token's `sub` claim, for example
-`repo:my-org/shop:ref:refs/heads/main`. Without that check, workflows in other people's repositories
-could get credentials for your role. Google Cloud (Workload Identity Federation), Azure (federated
-credentials) and GitLab CI support the same pattern.
+`repo:my-org/shop:ref:refs/heads/main`. Every GitHub repository gets tokens from the same issuer, so
+without that check, workflows in other people's repositories could get credentials for your role.
+The format of `sub` changes in some cases (for example, a job that uses a GitHub *environment* gets
+`repo:my-org/shop:environment:production`), so check GitHub's documentation. Google Cloud
+(Workload Identity Federation), Azure (federated credentials) and GitLab CI support the same pattern.
 
 The same idea works at runtime: give a VM or container a cloud identity (an AWS instance profile,
-EKS Pod Identity, GKE Workload Identity, an Azure managed identity). The cloud SDK then gets
-short-lived credentials automatically, and there is no key to store.
+EKS Pod Identity, Workload Identity Federation for GKE, an Azure managed identity). The cloud SDK
+then gets short-lived credentials automatically, and there is no key to store.
 
 ## Least privilege
 
@@ -307,8 +322,9 @@ s.db_password.get_secret_value()      # "hunter2", call this only where needed
   history. Use BuildKit secret mounts (`RUN --mount=type=secret,...`) for build-time secrets.
 - **Secrets in frontend code.** Anything shipped to a browser or mobile app is public, including
   variables with prefixes such as `NEXT_PUBLIC_` or `VITE_`.
-- **Secrets as command-line arguments.** Other users on the machine can see them with `ps`.
-- **Terraform state.** It stores secrets in plain text; see
+- **Secrets as command-line arguments.** On a default Linux system, other users on the machine can
+  see them with `ps`, and they often end up in shell history.
+- **Terraform state.** It can contain secrets in plain text; see
   [infrastructure as code](/posts/infrastructure-as-code).
 - **Rotation that was never tested.** The first rotation should not happen during an incident.
 
@@ -326,6 +342,6 @@ s.db_password.get_secret_value()      # "hunter2", call this only where needed
 
 - OWASP: [Secrets Management Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Secrets_Management_Cheat_Sheet.html)
 - Kubernetes docs: [Good practices for Kubernetes Secrets](https://kubernetes.io/docs/concepts/security/secrets-good-practices/)
-- GitHub Docs: [About security hardening with OpenID Connect](https://docs.github.com/en/actions/deployment/security-hardening-your-deployments/about-security-hardening-with-openid-connect)
+- GitHub Docs: [OpenID Connect](https://docs.github.com/en/actions/concepts/security/openid-connect)
 - GitHub Docs: [Removing sensitive data from a repository](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/removing-sensitive-data-from-a-repository)
 - HashiCorp Vault docs: [Database secrets engine](https://developer.hashicorp.com/vault/docs/secrets/databases)
