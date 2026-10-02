@@ -71,7 +71,7 @@ it yet, add a `[[section.topic]]` entry without a `post` field.
 ```sh
 cargo fmt
 cargo clippy --all-targets -- -D warnings
-DATABASE_URL=postgres://postgres:postgres@localhost:5432/postgres cargo test
+cargo test        # uses DATABASE_URL from .env; the role must be allowed to create databases
 ```
 
 Keep the codebase small and readable — it doubles as a teaching example. Prefer plain SQL and

@@ -40,6 +40,17 @@ fn is_cross_origin(headers: &HeaderMap) -> bool {
     }
 }
 
+/// PostgreSQL rejects NUL bytes in text values, so a `%00` anywhere in the URL
+/// would otherwise surface as a 500 from deep inside a query. No legitimate
+/// URL on this site contains one, so reject it up front.
+pub async fn reject_nul_in_url(req: Request, next: Next) -> Response {
+    let has_nul = |s: &str| s.contains("%00");
+    if has_nul(req.uri().path()) || req.uri().query().is_some_and(has_nul) {
+        return (StatusCode::BAD_REQUEST, "Bad request").into_response();
+    }
+    next.run(req).await
+}
+
 /// Adds conservative security headers to every response.
 pub async fn security_headers(req: Request, next: Next) -> Response {
     let mut res = next.run(req).await;

@@ -72,7 +72,9 @@ pub async fn login(
     if !state.limiter.check(&format!("login:{}", network_key(ip)), LOGIN_LIMIT.0, LOGIN_LIMIT.1) {
         return fail(&AppError::TooManyRequests.to_string(), StatusCode::TOO_MANY_REQUESTS);
     }
-    if form.password.chars().count() > 128 {
+    // Valid usernames never contain control characters (and Postgres rejects
+    // NUL in text), so answer exactly like a wrong password.
+    if form.password.chars().count() > 128 || form.username.chars().any(char::is_control) {
         return fail("Invalid username or password.", StatusCode::UNAUTHORIZED);
     }
 

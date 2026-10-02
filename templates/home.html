@@ -25,13 +25,14 @@
 {% endfor %}
 
 <form class="search" action="/" method="get" role="search"
-      hx-get="/" hx-target="#results" hx-swap="outerHTML" hx-push-url="true" hx-include="closest form">
+      hx-get="/" hx-target="#results" hx-swap="outerHTML" hx-push-url="true" hx-include="closest form"
+      hx-indicator="#results" hx-sync="this:replace">
   <div class="search-field">
     <label class="sr-only" for="q">Search articles</label>
     <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
     <input id="q" type="search" name="q" value="{{ filter.q }}" autocomplete="off"
            placeholder="Search: idempotency, b-tree, websocket, replication…"
-           hx-get="/" hx-trigger="input changed delay:300ms, search">
+           hx-get="/" hx-trigger="input changed delay:300ms">
   </div>
   <div class="search-filters">
     <label class="sr-only" for="f-tag">Tag</label>
@@ -49,11 +50,7 @@
       <option value="advanced" {% if filter.level == "advanced" %}selected{% endif %}>Advanced</option>
     </select>
     <label class="sr-only" for="f-sort">Sort</label>
-    <select id="f-sort" name="sort" hx-get="/" hx-trigger="change">
-      {% for choice in filter.sort_choices %}
-      <option value="{{ choice.value }}" {% if choice.selected %}selected{% endif %}>{{ choice.label }}</option>
-      {% endfor %}
-    </select>
+    {% include "partials/sort_select.html" %}
     <noscript><button type="submit" class="btn btn-sm">Search</button></noscript>
   </div>
 </form>

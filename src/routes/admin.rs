@@ -49,7 +49,9 @@ pub async fn create_round(
     RequireAdmin(admin): RequireAdmin,
     Form(form): Form<NewRoundForm>,
 ) -> AppResult<Response> {
-    let duration = Duration::hours(form.duration_hours);
+    // try_hours: Duration::hours panics on absurd values; MAX then fails the
+    // 1 hour – 31 days validation with a normal error message.
+    let duration = Duration::try_hours(form.duration_hours).unwrap_or(Duration::MAX);
     match votes::create_round(&state.db, &form.title, &form.description, &form.tags, duration, admin.id).await {
         Ok(id) => Ok(see_other(&format!("/admin/rounds/{id}"))),
         Err(VoteError::Database(e)) => Err(e.into()),

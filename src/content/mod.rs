@@ -20,6 +20,11 @@ use sqlx::PgPool;
 pub const LEVELS: [&str; 3] = ["beginner", "intermediate", "advanced"];
 const WORDS_PER_MINUTE: usize = 220;
 
+/// Bump when the stored representation changes in a way the rendered output
+/// below doesn't capture — notably the `search_vector` expression in `sync` —
+/// so every post is rewritten on the next startup.
+const SYNC_FORMAT_VERSION: u32 = 1;
+
 /// Arbitrary constant identifying the "content sync" advisory lock, so two
 /// app instances starting at the same time do not sync concurrently.
 const SYNC_LOCK_KEY: i64 = 0x05d7_c0de;
@@ -131,6 +136,28 @@ pub fn parse_post(slug: &str, raw: &str) -> anyhow::Result<ParsedPost> {
         None => published_at,
     };
     let rendered = markdown::render(body);
+    let reading_minutes = rendered.word_count.div_ceil(WORDS_PER_MINUTE).max(1) as i32;
+
+    // Hash what we store, not just the source file: a deploy that changes the
+    // Markdown renderer or reading-time rule must re-sync unchanged files too.
+    let mut hasher = Sha256::new();
+    hasher.update(format!("v{SYNC_FORMAT_VERSION}").as_bytes());
+    for part in [
+        fm.title.trim(),
+        fm.summary.trim(),
+        &fm.level,
+        &fm.tags.join(","),
+        &published_at.to_rfc3339(),
+        &updated_at.to_rfc3339(),
+        &reading_minutes.to_string(),
+        body,
+        &rendered.text,
+        &rendered.html,
+        &rendered.toc_html,
+    ] {
+        hasher.update([0u8]);
+        hasher.update(part.as_bytes());
+    }
 
     Ok(ParsedPost {
         slug: slug.to_string(),
@@ -145,8 +172,8 @@ pub fn parse_post(slug: &str, raw: &str) -> anyhow::Result<ParsedPost> {
         body_text: rendered.text,
         body_html: rendered.html,
         toc_html: rendered.toc_html,
-        reading_minutes: rendered.word_count.div_ceil(WORDS_PER_MINUTE).max(1) as i32,
-        content_hash: hex::encode(Sha256::digest(normalized.as_bytes())),
+        reading_minutes,
+        content_hash: hex::encode(hasher.finalize()),
     })
 }
 

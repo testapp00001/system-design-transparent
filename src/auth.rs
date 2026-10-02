@@ -211,9 +211,20 @@ pub fn validate_password(password: &str) -> Result<(), String> {
 }
 
 /// Only allow redirects to local paths, never `//evil.example` or full URLs.
+///
+/// Browsers strip tabs and newlines while parsing a URL, so `/\t/evil.example`
+/// would become `//evil.example` (another site). Any control character or
+/// whitespace is therefore rejected outright.
 pub fn safe_next(next: Option<&str>) -> String {
     match next {
-        Some(n) if n.starts_with('/') && !n.starts_with("//") && !n.contains('\\') => n.to_string(),
+        Some(n)
+            if n.starts_with('/')
+                && !n.starts_with("//")
+                && !n.contains('\\')
+                && !n.chars().any(|c| c.is_control() || c.is_whitespace()) =>
+        {
+            n.to_string()
+        }
         _ => "/".to_string(),
     }
 }
@@ -236,6 +247,11 @@ mod tests {
         assert_eq!(safe_next(Some("//evil.example")), "/");
         assert_eq!(safe_next(Some("https://evil.example")), "/");
         assert_eq!(safe_next(Some("/\\evil.example")), "/");
+        assert_eq!(safe_next(Some("/\t/evil.example")), "/");
+        assert_eq!(safe_next(Some("/\n/evil.example")), "/");
+        assert_eq!(safe_next(Some("/\r")), "/");
+        assert_eq!(safe_next(Some("/ /evil.example")), "/");
+        assert_eq!(safe_next(Some("/?q=a%20b&tag=x")), "/?q=a%20b&tag=x");
         assert_eq!(safe_next(None), "/");
     }
 }

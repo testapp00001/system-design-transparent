@@ -3,7 +3,8 @@ use std::time::Duration;
 use axum::{
     Form,
     extract::{Path, State},
-    response::Response,
+    http::StatusCode,
+    response::{IntoResponse, Response},
 };
 use serde::Deserialize;
 
@@ -116,8 +117,19 @@ async fn respond_with_poll(
         Err(e) => pv.error = Some(e.to_string()),
     }
     if ctx.htmx {
-        render(&PollPartial { pv })
-    } else {
-        Ok(see_other(&format!("/vote/rounds/{}#poll-{}", pv.poll.round_id, pv.poll.id)))
+        return render(&PollPartial { pv });
     }
+    let Some(error) = pv.error.take() else {
+        // Success without JavaScript: Post/Redirect/Get back to the round.
+        return Ok(see_other(&format!("/vote/rounds/{}#poll-{}", pv.poll.round_id, pv.poll.id)));
+    };
+    // Failure without JavaScript: a redirect would lose the message, so render
+    // the round page directly with the error shown on the poll it concerns.
+    let round = votes::get_round(&state.db, pv.poll.round_id).await?.ok_or(AppError::NotFound)?;
+    let mut polls = votes::polls_for_round(&state.db, &state.config, &round, ip_hash, false).await?;
+    if let Some(p) = polls.iter_mut().find(|p| p.poll.id == pv.poll.id) {
+        p.error = Some(error);
+    }
+    let page = RoundPage { layout: Layout::new(ctx, round.title.clone()), block: RoundBlock { round, polls } };
+    Ok((StatusCode::UNPROCESSABLE_ENTITY, render(&page)?).into_response())
 }

@@ -341,6 +341,104 @@ async fn vote_game_limits_and_winner(db: PgPool) {
 
     let res = app.get("/vote", Opts::default()).await;
     assert!(res.body.contains("Past rounds") && res.body.contains("MVCC explained"));
+
+    // Hiding the frozen winner afterwards (say, an offensive title noticed
+    // late) removes it from the results; the best visible suggestion moves up.
+    votes::set_hidden(&app.db, ids[1], true).await.unwrap();
+    let res = app.get("/vote", Opts::default()).await;
+    assert!(!res.body.contains("MVCC explained"), "{}", res.body);
+    assert!(res.body.contains("WAL and checkpoints"), "{}", res.body);
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn hidden_suggestions_release_votes(db: PgPool) {
+    let app = TestApp::new(db).await;
+    let (_, poll_id) = open_test_round(&app).await;
+    let author = Opts { ip: Some("203.0.113.40"), htmx: true, ..Default::default() };
+    let voter = Opts { ip: Some("203.0.113.41"), htmx: true, ..Default::default() };
+    for t in ["Buy cheap followers now", "Real topic number two", "Real topic number three"] {
+        app.post(&format!("/vote/polls/{poll_id}/suggestions"), &format!("title={}", t.replace(' ', "+")), author)
+            .await;
+    }
+    let ids: Vec<i64> = sqlx::query_scalar("SELECT id FROM suggestions WHERE poll_id = $1 ORDER BY id")
+        .bind(poll_id)
+        .fetch_all(&app.db)
+        .await
+        .unwrap();
+    for id in &ids {
+        app.post(&format!("/vote/suggestions/{id}/vote"), "on=1", voter).await;
+    }
+    let page = Opts { ip: voter.ip, ..Default::default() };
+    assert!(app.get("/vote", page).await.body.contains("0 of 3 votes left"));
+
+    // An admin hides the spam: the vote spent on it no longer counts...
+    votes::set_hidden(&app.db, ids[0], true).await.unwrap();
+    assert!(app.get("/vote", page).await.body.contains("1 of 3 votes left"));
+    // ...it can still be withdrawn (a retried unvote must not 404)...
+    let res = app.post(&format!("/vote/suggestions/{}/vote", ids[0]), "on=0", voter).await;
+    assert_eq!(res.status, StatusCode::OK, "{}", res.body);
+    // ...but nobody can vote for a hidden suggestion.
+    let res = app.post(&format!("/vote/suggestions/{}/vote", ids[0]), "on=1", voter).await;
+    assert_eq!(res.status, StatusCode::NOT_FOUND);
+}
+
+/// Inputs that used to cause 500s, lost messages or wrong ordering.
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn edge_cases_from_review(db: PgPool) {
+    let app = TestApp::new(db).await;
+    let published = app.library.posts.iter().filter(|p| !p.draft).count();
+
+    // A post dated in the future must not break the trending sort.
+    sqlx::query("UPDATE posts SET published_at = now() + interval '3 days' WHERE slug = $1")
+        .bind(&app.first_post().slug)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(app.get("/?sort=trending", Opts::default()).await.status, StatusCode::OK);
+    assert_eq!(app.get("/?sort=trending", Opts { htmx: true, ..Default::default() }).await.status, StatusCode::OK);
+
+    // NUL bytes are rejected cleanly instead of reaching Postgres.
+    for path in ["/?tag=%00", "/?q=a%00b", "/posts/a%00b"] {
+        assert_eq!(app.get(path, Opts::default()).await.status, StatusCode::BAD_REQUEST, "{path}");
+    }
+    let res = app.post("/login", "username=%00&password=whatever123", Opts::default()).await;
+    assert_eq!(res.status, StatusCode::UNAUTHORIZED);
+
+    // A page past the end redirects to the last real page.
+    let res = app.get("/?page=999", Opts::default()).await;
+    assert_eq!(res.status, StatusCode::SEE_OTHER);
+    let last = published.div_ceil(12);
+    assert_eq!(res.location(), if last > 1 { format!("/?page={last}") } else { "/?".to_string() });
+
+    // Typing a search while the sort dropdown is untouched sends `sort=` (its
+    // default option); that must rank by relevance, exactly like no sort.
+    let word = app.first_post().title.split_whitespace().max_by_key(|w| w.len()).unwrap();
+    let q: String = word.chars().filter(|c| c.is_alphanumeric()).collect();
+    let htmx = Opts { htmx: true, ..Default::default() };
+    let from_form = app.get(&format!("/?q={q}&tag=&level=&sort="), htmx).await.body;
+    let plain = app.get(&format!("/?q={q}"), htmx).await.body;
+    assert_eq!(from_form, plain);
+    assert!(from_form.contains(r#"hx-swap-oob="true""#), "dropdown is refreshed out-of-band");
+    assert!(from_form.contains(r#"value="" selected>Best match"#), "{from_form}");
+
+    // Without JavaScript, a rejected suggestion shows its error (422) instead
+    // of redirecting as if it had worked.
+    let (_, poll_id) = open_test_round(&app).await;
+    let res = app.post(&format!("/vote/polls/{poll_id}/suggestions"), "title=abc", Opts::default()).await;
+    assert_eq!(res.status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(res.body.contains("<html") && res.body.contains("5–120 characters"), "{}", res.body);
+
+    // An absurd round duration is a validation error, not a panic.
+    let cookie = app.register("dana").await;
+    users::set_admin(&app.db, "dana", true).await.unwrap();
+    let res = app
+        .post(
+            "/admin/rounds",
+            "title=x&tags=database&duration_hours=9223372036854775807",
+            Opts { cookie: Some(&cookie), ..Default::default() },
+        )
+        .await;
+    assert_eq!(res.status, StatusCode::UNPROCESSABLE_ENTITY);
 }
 
 /// The classic check-then-insert race: fire many votes from the same network

@@ -1,0 +1,5 @@
+<select id="f-sort" name="sort" hx-get="/" hx-trigger="change"{% if sort.oob %} hx-swap-oob="true"{% endif %}>
+  {% for choice in sort.choices %}
+  <option value="{{ choice.value }}" {% if choice.selected %}selected{% endif %}>{{ choice.label }}</option>
+  {% endfor %}
+</select>

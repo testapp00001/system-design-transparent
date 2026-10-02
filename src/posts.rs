@@ -68,15 +68,28 @@ impl Sort {
         ("liked", "Most liked"),
     ];
 
-    fn parse(s: Option<&str>, has_query: bool) -> Self {
-        match s {
-            Some("newest") => Sort::Newest,
-            Some("trending") => Sort::Trending,
-            Some("top") => Sort::Top,
-            Some("liked") => Sort::Liked,
-            Some("relevance") if has_query => Sort::Relevance,
-            _ if has_query => Sort::Relevance,
-            _ => Sort::Newest,
+    /// The order used when the visitor didn't pick one: best match while
+    /// searching, newest otherwise.
+    pub fn default_for(has_query: bool) -> Self {
+        if has_query { Sort::Relevance } else { Sort::Newest }
+    }
+
+    /// Returns the sort to use and whether it differs from the default. An
+    /// empty or unknown value means "default", which is what the form's
+    /// first option sends, so typing a search ranks by relevance.
+    fn parse(s: Option<&str>, has_query: bool) -> (Self, bool) {
+        let default = Sort::default_for(has_query);
+        let chosen = match s.map(str::trim) {
+            Some("newest") => Some(Sort::Newest),
+            Some("trending") => Some(Sort::Trending),
+            Some("top") => Some(Sort::Top),
+            Some("liked") => Some(Sort::Liked),
+            Some("relevance") if has_query => Some(Sort::Relevance),
+            _ => None,
+        };
+        match chosen {
+            Some(sort) if sort != default => (sort, true),
+            _ => (default, false),
         }
     }
 
@@ -109,6 +122,8 @@ pub struct ListFilter {
     pub tag: Option<String>,
     pub level: Option<String>,
     pub sort: Sort,
+    /// True when the visitor picked a non-default sort.
+    pub explicit_sort: bool,
     pub page: i64,
 }
 
@@ -117,8 +132,10 @@ impl ListFilter {
         let q: String = p.q.as_deref().unwrap_or("").trim().chars().take(200).collect();
         let tsquery = build_prefix_tsquery(&q);
         let non_empty = |s: &Option<String>| s.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(String::from);
+        let (sort, explicit_sort) = Sort::parse(p.sort.as_deref(), tsquery.is_some());
         Self {
-            sort: Sort::parse(p.sort.as_deref(), tsquery.is_some()),
+            sort,
+            explicit_sort,
             tsquery,
             q,
             tag: non_empty(&p.tag),
@@ -140,7 +157,9 @@ impl ListFilter {
         if let Some(l) = &self.level {
             parts.push(format!("level={}", enc(l)));
         }
-        parts.push(format!("sort={}", self.sort.as_str()));
+        if self.explicit_sort {
+            parts.push(format!("sort={}", self.sort.as_str()));
+        }
         if page > 1 {
             parts.push(format!("page={page}"));
         }
@@ -197,21 +216,8 @@ pub async fn list(db: &PgPool, f: &ListFilter) -> Result<Vec<PostCard>, sqlx::Er
         }
     }
 
-    qb.push(" FROM posts p WHERE p.is_published");
-    if let Some(tag) = &f.tag {
-        qb.push(" AND p.tags @> ARRAY[").push_bind(tag.clone()).push("]::text[]");
-    }
-    if let Some(level) = &f.level {
-        qb.push(" AND p.level = ").push_bind(level.clone());
-    }
-    if let Some(tsq) = &f.tsquery {
-        // Full-text match, OR a fuzzy title match so small typos still work.
-        qb.push(" AND (p.search_vector @@ to_tsquery('english', ")
-            .push_bind(tsq.clone())
-            .push(") OR ")
-            .push_bind(f.q.clone())
-            .push(" <% p.title)");
-    }
+    qb.push(" FROM posts p");
+    push_where(&mut qb, f);
 
     qb.push(" ORDER BY ");
     match (f.sort, &f.tsquery) {
@@ -223,10 +229,12 @@ pub async fn list(db: &PgPool, f: &ListFilter) -> Result<Vec<PostCard>, sqlx::Er
                 .push(", p.title) DESC, ");
         }
         (Sort::Trending, _) => {
-            // Hacker News style gravity: engagement decays with age.
+            // Hacker News style gravity: engagement decays with age. The age is
+            // clamped at 0 so a post dated in the future can't make the base
+            // negative (power() would raise an error) or zero.
             qb.push(
                 "(p.upvote_count * 2 + p.like_count + p.save_count + 1) \
-                 / power(extract(epoch FROM now() - p.published_at) / 3600 + 2, 1.5) DESC, ",
+                 / power(greatest(extract(epoch FROM now() - p.published_at), 0) / 3600 + 2, 1.5) DESC, ",
             );
         }
         (Sort::Top, _) => {
@@ -247,6 +255,32 @@ pub async fn list(db: &PgPool, f: &ListFilter) -> Result<Vec<PostCard>, sqlx::Er
         c.headline = c.headline.as_deref().map(finish_headline);
     }
     Ok(cards)
+}
+
+/// The WHERE clause shared by `list` and `count`, so they always agree.
+fn push_where(qb: &mut QueryBuilder<Postgres>, f: &ListFilter) {
+    qb.push(" WHERE p.is_published");
+    if let Some(tag) = &f.tag {
+        qb.push(" AND p.tags @> ARRAY[").push_bind(tag.clone()).push("]::text[]");
+    }
+    if let Some(level) = &f.level {
+        qb.push(" AND p.level = ").push_bind(level.clone());
+    }
+    if let Some(tsq) = &f.tsquery {
+        // Full-text match, OR a fuzzy title match so small typos still work.
+        qb.push(" AND (p.search_vector @@ to_tsquery('english', ")
+            .push_bind(tsq.clone())
+            .push(") OR ")
+            .push_bind(f.q.clone())
+            .push(" <% p.title)");
+    }
+}
+
+/// Number of posts matching the filter (ignores paging).
+pub async fn count(db: &PgPool, f: &ListFilter) -> Result<i64, sqlx::Error> {
+    let mut qb: QueryBuilder<Postgres> = QueryBuilder::new("SELECT count(*) FROM posts p");
+    push_where(&mut qb, f);
+    qb.build_query_scalar().fetch_one(db).await
 }
 
 pub async fn get_by_slug(db: &PgPool, slug: &str) -> Result<Option<PostDetail>, sqlx::Error> {
@@ -447,6 +481,24 @@ mod tests {
         });
         assert_eq!(f.sort, Sort::Relevance);
         assert_eq!(f.level, None);
-        assert_eq!(f.page_query(2), "q=cache&sort=relevance&page=2");
+        assert_eq!(f.page_query(2), "q=cache&page=2");
+    }
+
+    #[test]
+    fn empty_sort_means_default() {
+        // What the search form sends while its first ("default") option is selected.
+        let p = |q: &str, sort: &str| ListParams { q: Some(q.into()), sort: Some(sort.into()), ..Default::default() };
+        let f = ListFilter::from_params(&p("pool", ""));
+        assert_eq!((f.sort, f.explicit_sort), (Sort::Relevance, false));
+        let f = ListFilter::from_params(&p("", ""));
+        assert_eq!((f.sort, f.explicit_sort), (Sort::Newest, false));
+        // "newest" is the default without a query, but an explicit choice with one.
+        let f = ListFilter::from_params(&p("", "newest"));
+        assert_eq!((f.sort, f.explicit_sort), (Sort::Newest, false));
+        let f = ListFilter::from_params(&p("pool", "newest"));
+        assert_eq!((f.sort, f.explicit_sort), (Sort::Newest, true));
+        assert_eq!(f.page_query(1), "q=pool&sort=newest");
+        let f = ListFilter::from_params(&p("", "relevance"));
+        assert_eq!((f.sort, f.explicit_sort), (Sort::Newest, false));
     }
 }

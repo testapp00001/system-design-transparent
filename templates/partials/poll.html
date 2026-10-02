@@ -14,7 +14,8 @@
     <li class="suggestion {% if s.is_leader %}is-leader{% endif %} {% if s.is_hidden %}is-hidden{% endif %}">
       {% if pv.open && !s.is_hidden %}
       <form method="post" action="/vote/suggestions/{{ s.id }}/vote"
-            hx-post="/vote/suggestions/{{ s.id }}/vote" hx-target="#poll-{{ pv.poll.id }}" hx-swap="outerHTML" hx-disabled-elt="find button">
+            hx-post="/vote/suggestions/{{ s.id }}/vote" hx-target="#poll-{{ pv.poll.id }}" hx-swap="outerHTML" hx-disabled-elt="find button"
+            hx-indicator="closest .poll">
         <input type="hidden" name="on" value="{% if s.voted %}0{% else %}1{% endif %}">
         <button type="submit" class="vote-btn {% if s.voted %}is-on{% endif %}" aria-pressed="{{ s.voted }}"
                 title="{% if s.voted %}Remove your vote{% else %}Vote for this{% endif %}">
@@ -43,7 +44,8 @@
 
   {% if pv.can_suggest() %}
   <form class="suggest-form" method="post" action="/vote/polls/{{ pv.poll.id }}/suggestions"
-        hx-post="/vote/polls/{{ pv.poll.id }}/suggestions" hx-target="#poll-{{ pv.poll.id }}" hx-swap="outerHTML" hx-disabled-elt="find button">
+        hx-post="/vote/polls/{{ pv.poll.id }}/suggestions" hx-target="#poll-{{ pv.poll.id }}" hx-swap="outerHTML" hx-disabled-elt="find button"
+        hx-indicator="closest .poll">
     <label class="sr-only" for="title-{{ pv.poll.id }}">Suggested article title</label>
     <input id="title-{{ pv.poll.id }}" name="title" required minlength="5" maxlength="120"
            placeholder="An article you wish existed, e.g. “How Postgres VACUUM works”">
