@@ -11,10 +11,12 @@ description = "Mental tools you will use in every other section."
 
   [[section.topic]]
   title = "How to approach a system design problem"
+  post = "how-to-approach-system-design"
   note = "Requirements, estimates, API, data model, high-level design, deep dives."
 
   [[section.topic]]
   title = "Back-of-the-envelope estimation"
+  post = "how-to-approach-system-design"
   note = "Latency numbers, QPS, storage and bandwidth math in five minutes."
 
   [[section.topic]]
@@ -32,6 +34,7 @@ description = "The plumbing every request travels through."
 
   [[section.topic]]
   title = "TCP vs UDP — and when to use which"
+  post = "tcp-vs-udp"
 
   [[section.topic]]
   title = "HTTP/1.1, HTTP/2 and HTTP/3 (QUIC)"
@@ -44,9 +47,11 @@ description = "The plumbing every request travels through."
 
   [[section.topic]]
   title = "Polling, long polling, SSE, WebSockets"
+  post = "realtime-polling-sse-websockets"
 
   [[section.topic]]
   title = "Scaling WebSockets: a 10,000-person chat room"
+  post = "scaling-websockets-chat"
 
   [[section.topic]]
   title = "CDNs and edge caching"
@@ -65,12 +70,15 @@ description = "Contracts between programs, and how to keep them reliable."
 
   [[section.topic]]
   title = "REST vs gRPC vs GraphQL"
+  post = "rest-grpc-graphql"
 
   [[section.topic]]
   title = "API design: pagination, versioning, errors"
+  post = "api-design-pagination-versioning"
 
   [[section.topic]]
   title = "Rate limiting algorithms"
+  post = "rate-limiting"
 
   [[section.topic]]
   title = "Webhooks: delivering events to other systems reliably"
@@ -92,12 +100,15 @@ description = "Where most performance problems — and most data loss — come f
 
   [[section.topic]]
   title = "Indexes and reading EXPLAIN"
+  post = "database-indexes-and-explain"
 
   [[section.topic]]
   title = "Transactions and isolation levels"
+  post = "transactions-and-isolation-levels"
 
   [[section.topic]]
   title = "Connection pooling"
+  post = "connection-pooling"
 
   [[section.topic]]
   title = "Choosing a database: relational, key-value, document, wide-column, time-series, search, graph, vector"
@@ -105,12 +116,15 @@ description = "Where most performance problems — and most data loss — come f
 
   [[section.topic]]
   title = "Replication and high availability"
+  post = "replication-and-high-availability"
 
   [[section.topic]]
   title = "Backups, point-in-time recovery and restore drills"
+  post = "database-backups-and-recovery"
 
   [[section.topic]]
   title = "Partitioning and sharding"
+  post = "sharding-and-partitioning"
 
   [[section.topic]]
   title = "LSM trees vs B-trees"
@@ -127,6 +141,7 @@ description = "Making reads cheap without serving wrong data."
 
   [[section.topic]]
   title = "Caching strategies, invalidation and stampedes"
+  post = "caching-strategies"
 
   [[section.topic]]
   title = "HTTP caching: Cache-Control, ETags, CDNs"
@@ -140,9 +155,11 @@ description = "Serving more traffic, and failing gracefully when things break."
 
   [[section.topic]]
   title = "Load balancing and stateless servers"
+  post = "load-balancing-and-stateless-servers"
 
   [[section.topic]]
   title = "Resilience patterns: circuit breakers, bulkheads, load shedding"
+  post = "resilience-patterns"
 
   [[section.topic]]
   title = "Autoscaling"
@@ -159,9 +176,11 @@ description = "What changes when one machine becomes many."
 
   [[section.topic]]
   title = "CAP, PACELC and consistency models"
+  post = "cap-theorem-and-consistency-models"
 
   [[section.topic]]
   title = "Distributed transactions: 2PC, sagas and the outbox pattern"
+  post = "distributed-transactions-saga-outbox"
 
   [[section.topic]]
   title = "Consensus and leader election (Raft)"
@@ -181,9 +200,11 @@ description = "Doing work later, elsewhere, reliably."
 
   [[section.topic]]
   title = "Message queues vs event streams (RabbitMQ, Kafka)"
+  post = "message-queues-and-event-streams"
 
   [[section.topic]]
   title = "Background jobs and cron"
+  post = "background-jobs-and-cron"
 
   [[section.topic]]
   title = "Event-driven architecture, event sourcing and CQRS"
@@ -200,9 +221,11 @@ description = "How to structure code and systems so they can keep changing."
 
   [[section.topic]]
   title = "Beyond MVC: layered, hexagonal and clean architecture"
+  post = "beyond-mvc-project-architecture"
 
   [[section.topic]]
   title = "Monolith vs microservices (and monorepo vs polyrepo)"
+  post = "monolith-vs-microservices"
 
   [[section.topic]]
   title = "Domain-driven design basics"
@@ -219,12 +242,15 @@ description = "Getting code to production safely, quickly and repeatably."
 
   [[section.topic]]
   title = "From Docker to Compose, Swarm and Kubernetes"
+  post = "docker-to-kubernetes"
 
   [[section.topic]]
   title = "CI/CD pipelines and the hotfix problem"
+  post = "ci-cd-and-hotfixes"
 
   [[section.topic]]
   title = "Deployment strategies and zero-downtime database migrations"
+  post = "deployment-strategies-and-zero-downtime-migrations"
 
   [[section.topic]]
   title = "Infrastructure as code (Terraform, OpenTofu, Pulumi)"
@@ -241,6 +267,7 @@ description = "Knowing what production is doing, and why."
 
   [[section.topic]]
   title = "Logs, metrics and traces; SLIs, SLOs and error budgets"
+  post = "observability-logs-metrics-traces"
 
   [[section.topic]]
   title = "Incident response and blameless postmortems"
@@ -254,6 +281,7 @@ description = "Protecting users and their data."
 
   [[section.topic]]
   title = "Authentication: passwords, sessions vs JWT, CSRF"
+  post = "authentication-sessions-vs-jwt"
 
   [[section.topic]]
   title = "OAuth 2.0 and OpenID Connect"
@@ -270,6 +298,7 @@ description = "How real companies solved real problems, and classic design exerc
 
   [[section.topic]]
   title = "How Discord stores trillions of messages"
+  post = "discord-message-storage-case-study"
 
   [[section.topic]]
   title = "Design a URL shortener"

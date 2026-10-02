@@ -196,8 +196,23 @@ pub fn load_library(dir: &Path) -> anyhow::Result<Library> {
             bail!("roadmap.toml: topic {:?} links to unknown post {slug:?}", topic.title);
         }
     }
+    // Articles link to each other a lot; a renamed or unwritten article must
+    // fail CI instead of becoming a 404 for readers.
+    for post in posts.iter().filter(|p| !p.draft) {
+        if let Some(missing) = internal_post_links(&post.body_md).find(|slug| !published.contains(slug)) {
+            bail!("posts/{}.md links to /posts/{missing}, which does not exist", post.slug);
+        }
+    }
 
     Ok(Library { tags: tags.tags, posts, roadmap })
+}
+
+/// Slugs of Markdown links of the form `](/posts/<slug>)` (optionally with `#anchor`).
+fn internal_post_links(markdown: &str) -> impl Iterator<Item = &str> {
+    markdown.split("](/posts/").skip(1).map(|rest| {
+        let end = rest.find(|c: char| !(c.is_ascii_alphanumeric() || c == '-')).unwrap_or(rest.len());
+        &rest[..end]
+    })
 }
 
 #[derive(Debug, Default)]
@@ -321,6 +336,12 @@ mod tests {
         assert!(parse_post("x", "no frontmatter").is_err());
         assert!(parse_post("x", &SAMPLE.replace("beginner", "expert")).is_err());
         assert!(parse_post("x", &SAMPLE.replace("level =", "lvl =")).is_err(), "unknown fields rejected");
+    }
+
+    #[test]
+    fn finds_internal_links() {
+        let md = "See [a](/posts/alpha-1) and [b](/posts/beta#part), not [c](https://x.y/posts/z).";
+        assert_eq!(internal_post_links(md).collect::<Vec<_>>(), vec!["alpha-1", "beta"]);
     }
 
     /// Guards every pull request: the real content directory must be valid.
