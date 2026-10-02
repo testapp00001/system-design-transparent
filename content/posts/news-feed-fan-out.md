@@ -49,7 +49,8 @@ problem below.
 build my feed, the server looks up everyone I follow and pulls their recent posts.
 
 ```sql
--- newest 20 posts from the accounts that $viewer follows (PostgreSQL)
+-- newest 20 posts from the accounts that the viewer follows (PostgreSQL)
+-- $1 = the viewer's user id
 SELECT p.id, p.author_id, p.created_at
 FROM follows f
 CROSS JOIN LATERAL (
@@ -59,14 +60,16 @@ CROSS JOIN LATERAL (
     ORDER BY created_at DESC, id DESC
     LIMIT 20                        -- at most 20 per followed account
 ) p
-WHERE f.follower_id = $viewer
+WHERE f.follower_id = $1
 ORDER BY p.created_at DESC, p.id DESC
 LIMIT 20;
 ```
 
-With an index on `posts (author_id, created_at DESC, id DESC)`, this runs one short index scan per
-followed account. The `LATERAL` subquery matters: a plain join can make the database read *every*
-post of every followed account before sorting (see [indexes and EXPLAIN](/posts/database-indexes-and-explain)).
+With an index on `follows (follower_id, followee_id)` and one on
+`posts (author_id, created_at DESC, id DESC)`, the database can run one short index scan per followed
+account. The `LATERAL` subquery helps: with a plain join, the planner may read *every* post of every
+followed account before sorting. Check the real plan with `EXPLAIN` (see
+[indexes and EXPLAIN](/posts/database-indexes-and-explain)).
 
 Pull is simple, posting costs one insert, and deletes, unfollows and privacy changes apply instantly,
 because nothing is precomputed. But every feed open repeats the work: at peak, 17,000 feeds/s × 200
@@ -94,7 +97,9 @@ timeline. Reading a feed becomes one lookup.
 ```
 
 Fan-out runs **asynchronously** through a [queue](/posts/message-queues-and-event-streams): the
-author gets a response once the post is saved, and followers see it seconds later. A Redis **sorted
+author gets a response once the post is saved, and followers see it seconds later. Saving the post
+and enqueuing the job are two separate writes; if the second one fails, nobody sees the post. The
+[transactional outbox](/posts/distributed-transactions-saga-outbox) pattern closes that gap. A Redis **sorted
 set** (members ordered by a numeric score) fits a timeline well. The member is the post id; the score
 is the post time in milliseconds:
 
@@ -114,21 +119,26 @@ def fan_out(post_id: int, author_id: int, created_ms: int) -> None:
         pipe.execute()
 ```
 
-- **The insert is idempotent**, so a retried job creates no duplicates (see
+- **The insert is idempotent**: `ZADD` of a member that is already there with the same score
+  changes nothing, so a retried job creates no duplicates (see
   [retries and idempotency](/posts/retries-timeouts-and-idempotency)).
 - **Only push into timelines that exist.** Pushing into a missing one creates a timeline with only
   the newest posts: an almost empty feed. Users without a cached timeline (inactive, or evicted) get
-  one rebuilt from the pull query when they return.
-- A Redis **list** (`LPUSH` + `LTRIM`) uses less memory but keeps insertion order, and workers can
-  finish out of order. A sorted set keeps the order by score.
+  one rebuilt from the pull query when they return. In the sketch above, the check and the write are
+  separate steps, so a timeline evicted between them is re-created with only the new post. To close that gap, do
+  both in one small Lua script, which Redis runs as a single step.
+- A Redis **list** (`LPUSH` + `LTRIM`) usually uses less memory, but it keeps insertion order (and
+  workers can finish out of order), and a retried job pushes the same id twice. A sorted set keeps
+  the order by score and stores each id only once.
 
 Write cost: 10 million posts × 200 followers = **2 billion timeline inserts per day**, about 23,000
-per second. If only active users (1 in 4 here) have a timeline, it is about four times less.
+per second. If only active users (1 in 4 here) have a timeline, it is about a quarter of that.
 
 ## The celebrity problem and the hybrid model
 
 Now an account with 30 million followers posts. If your workers manage 200,000 inserts per second in
-total, that one post takes **150 seconds** to reach everyone, and every other post waits behind it.
+total, that one post takes **150 seconds** to reach everyone. With one shared queue, every other
+post waits behind it.
 Much of the work is wasted: many of those followers will not open the app today.
 
 The usual answer is a **hybrid**: posts from normal accounts are pushed, and posts from very big
@@ -146,8 +156,9 @@ list. It is one hot cache entry, not millions of queries. Keep it in Redis, and 
 server's memory for a second or two (see [caching strategies](/posts/caching-strategies)). Pick the
 "big" threshold from your data: compare the cost of one fan-out with an extra merge on every read.
 
-Martin Kleppmann's book *Designing Data-Intensive Applications* uses a social network's home timeline
-(Twitter's, in the first edition) to explain this trade-off, including the hybrid.
+The first edition of Martin Kleppmann's book *Designing Data-Intensive Applications* uses Twitter's
+home timeline (in chapter 1) to explain this trade-off, including the hybrid for accounts with very
+many followers.
 
 ## Store ids, then hydrate
 
@@ -177,8 +188,12 @@ Memory = cached users × entries per timeline × bytes per entry.
 | Ids only, raw (8-byte id + 8-byte score), 500 entries | 8 KB | 400 GB |
 | Ids, assuming ~64 bytes per entry with Redis overhead | 32 KB | 1.6 TB |
 
-- **The 64 bytes is a planning assumption.** Data structures add pointers and bookkeeping to every
-  element. Load a realistic timeline and measure with `MEMORY USAGE timeline:42`. Replicas double it.
+- **The 64 bytes is a planning assumption, not a measured number.** Data structures add pointers
+  and bookkeeping to every element, and the real cost depends on the Redis version and encoding; it
+  can be higher. Small sorted sets use a compact encoding, but above 128 entries (the default
+  `zset-max-listpack-entries`) Redis switches to a skip list plus a hash table, which costs much more
+  per entry. Load a realistic timeline and measure with `MEMORY USAGE timeline:42 SAMPLES 0` (the
+  default only samples a few elements and estimates). Each replica adds another full copy.
 - **Who gets a timeline** is the biggest lever. All 200 million registered users instead of the 50
   million active ones would need four times the memory.
 - **Length** is the second lever. Measure how deep users really scroll; past the cache, use pull.
@@ -204,9 +219,12 @@ ZRANGE timeline:42 +inf -inf BYSCORE REV LIMIT 0 25 WITHSCORES
 ZRANGE timeline:42 1790000123456 -inf BYSCORE REV LIMIT 0 25 WITHSCORES
 ```
 
-This form of `ZRANGE` needs Redis 6.2 or later. Encode `(time, id)` as an opaque string for the
-client; the id breaks ties between posts from the same millisecond. When the cursor passes the oldest
-cached entry, switch to the pull query with `WHERE (created_at, id) < ($time, $id)`.
+This form of `ZRANGE` needs Redis 6.2 or later; older versions use `ZREVRANGEBYSCORE`. With `REV`,
+the first number is the *highest* score. Encode `(time, id)` as an opaque string for the client; the
+id breaks ties between posts from the same millisecond. (Redis orders members with equal scores by
+their bytes, reversed with `REV`, so this matches number order only if all ids have the same number
+of digits.) When the cursor passes the oldest cached entry, switch to the pull query and add
+`AND (created_at, id) < ($time, $id)` inside the `LATERAL` subquery.
 
 > [!WARNING]
 > Redis sorted set scores are 64-bit floating point numbers, which hold integers exactly only up to
@@ -244,7 +262,9 @@ data: {"count": 3}
 
 After a fan-out worker updates `timeline:42`, it publishes a tiny message on a per-user channel (for
 example with [Redis Pub/Sub](/posts/pub-sub-redis-nats)). The SSE server holding user 42's connection
-forwards it, at most one event every few seconds, and the client shows "3 new posts".
+forwards it, at most one event every few seconds, and the client shows "3 new posts". Because the
+event has a name, the browser code listens with `addEventListener("new_posts", ...)`; `onmessage`
+only receives events without an `event:` line.
 
 Big accounts are not fanned out, so no per-user message exists for their posts. Each SSE server can
 subscribe once to a big account's channel and notify its local followers, like the two-level fan-out
@@ -296,8 +316,9 @@ Once you push, monitor feed latency (p99), timeline cache hit rate, and **fan-ou
 - Martin Kleppmann: [Designing Data-Intensive Applications](https://dataintensive.net/), which uses
   home timelines as a worked example
 - Adam Silberstein, Jeff Terrace, Brian F. Cooper and Raghu Ramakrishnan: *Feeding Frenzy: Selectively
-  Materializing Users' Event Feeds* (SIGMOD 2010), on choosing push or pull per producer and consumer
+  Materializing Users' Event Feeds* (SIGMOD 2010), on choosing push or pull for each pair of
+  producer (author) and consumer (reader)
 - Redis docs: [Sorted sets](https://redis.io/docs/latest/develop/data-types/sorted-sets/) and
   [ZRANGE](https://redis.io/docs/latest/commands/zrange/)
 - MDN: [Using server-sent events](https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events/Using_server-sent_events)
-- Markus Winand: [Paging Through Results](https://use-the-index-luke.com/no-offset)
+- Markus Winand, *Use The Index, Luke!*: [why keyset pagination beats OFFSET](https://use-the-index-luke.com/no-offset)

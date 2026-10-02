@@ -20,9 +20,11 @@ by the W3C and the IETF. The main APIs:
 - `RTCPeerConnection`: send and receive audio and video with another endpoint.
 - `RTCDataChannel`: send arbitrary messages over the same connection.
 
-The browser handles codecs (Opus for audio; VP8, VP9, H.264 or AV1 for video, depending on the
-browser), echo cancellation, a **jitter buffer** (a small queue that smooths out packets arriving at
-uneven times), and **congestion control** (lowering the bitrate when the network gets worse).
+The browser handles codecs, echo cancellation, a **jitter buffer** (a small queue that smooths out
+packets arriving at uneven times), and **congestion control** (lowering the bitrate when the network
+gets worse). The standards require every browser to support the Opus and G.711 (an old telephone
+codec) audio codecs, and the VP8 and H.264 video codecs. Support for VP9 and AV1 differs by browser
+and version.
 
 Media travels mostly over **UDP**, because in a call a late packet is useless, and TCP would stall
 everything behind one lost packet (see [TCP vs UDP](/posts/tcp-vs-udp)).
@@ -55,7 +57,7 @@ How these messages travel is up to you, usually over a WebSocket to your own ser
 [polling, SSE, WebSockets and WebRTC](/posts/realtime-polling-sse-websockets)).
 
 ```text
- Alice (browser)            signaling server (WebSocket)            Bob (browser)
+ Alice (browser)       signaling server (WebSocket)                Bob (browser)
    | createOffer()                   |                                   |
    | --- offer (SDP) --------------> | --- offer (SDP) ----------------> |
    |                                 |                   createAnswer()  |
@@ -76,7 +78,8 @@ a=fingerprint:sha-256 7B:8B:F0:...:A2
 a=rtpmap:111 opus/48000/2
 ```
 
-The caller's side, without error handling:
+The caller's side, without error handling (`turnCreds` holds short-lived TURN credentials that your
+own API returned; see the warning below):
 
 ```js
 const pc = new RTCPeerConnection({
@@ -124,28 +127,31 @@ some port. Nobody outside can send to `192.168.1.20` directly.
 
 - **STUN** (Session Traversal Utilities for NAT): the browser asks a STUN server "which address do
   you see me as?". STUN is cheap: tiny requests, no media.
-- **Connectivity checks:** both peers send test packets to each other's candidates. An outgoing packet
-  opens a short-lived mapping in each NAT, so replies can come back in ("UDP hole punching"). ICE
-  picks the best working pair and prefers direct paths over relays.
+- **Connectivity checks:** both peers send test packets to each other's candidates. Each outgoing
+  packet opens a short-lived mapping in the sender's own NAT, so packets from the other peer can come
+  back in ("UDP hole punching"). ICE picks the best working pair and prefers direct paths over relays.
 - **TURN** (Traversal Using Relays around NAT) is the fallback. Some NATs (often called symmetric
-  NATs) use a different public port for every destination, so the STUN address is useless to the
-  peer. Some firewalls block UDP completely. Then media goes through a TURN server, which relays it.
-  TURN over TLS on port 443 gets through many strict corporate networks.
+  NATs) use a different public port for each destination, so the address that STUN reported is
+  often not the one the other peer would need, and a direct path can fail. Some firewalls block UDP
+  completely. Then media goes through a TURN server, which relays it. TURN over TLS on port 443 gets
+  through many strict corporate networks, because it uses the HTTPS port and is wrapped in TLS.
 
 ### The cost of TURN
 
-TURN carries **every media packet, in both directions, for the whole call**. In a fully relayed
-one-to-one call where each person sends 1.5 Mbit/s, the TURN server sends 2 x 1.5 = 3 Mbit/s. One
-hour is 3 x 3,600 = 10,800 Mbit, about 1.35 GB of outbound traffic. With cloud egress pricing, that
-adds up. Most calls connect directly, but you cannot predict
-which will not, so a real product needs TURN. Measure the share of relayed calls (`getStats()`
-reports the selected candidate pair) and plan capacity from that.
+TURN carries **every media packet, in both directions, for the whole call**. Take a relayed
+one-to-one call through one TURN server, where each person sends 1.5 Mbit/s. The server forwards
+each person's stream to the other, so it sends 2 x 1.5 = 3 Mbit/s. One hour is 3 x 3,600 = 10,800
+Mbit, about 1.35 GB of outbound traffic. With cloud egress pricing, that adds up. Usually most calls
+connect directly, but you cannot predict which ones will not, so a real product needs TURN. Measure
+the share of relayed calls (`getStats()` reports the selected candidate pair and its candidate
+types) and plan capacity from that.
 
 > [!WARNING]
 > Never ship long-lived TURN passwords in frontend code: anyone can copy them and relay traffic
 > through your server for free. Issue **short-lived credentials** from your API (coturn, a widely used
-> open-source TURN server, supports a shared-secret scheme for this). Also block relaying to your
-> private network ranges, or attackers can use TURN to reach internal services.
+> open-source TURN server, supports a shared-secret scheme for this with its `use-auth-secret` and
+> `static-auth-secret` options). Also block relaying to your private network ranges (in coturn, with
+> `denied-peer-ip`), or attackers can use TURN to reach internal services.
 
 ## Encryption is always on
 
@@ -157,10 +163,13 @@ Two consequences:
 
 - Security depends on your **signaling**. Whoever can change the SDP in transit can swap the
   fingerprint. Use `wss://` and authenticate users.
-- Encryption is **hop by hop**. An SFU is a WebRTC endpoint, so it can decrypt the media. For
-  **end-to-end encryption**, the app encrypts each frame again before sending, for example with the
-  browser's encoded-transform APIs (also called "insertable streams") or SFrame. Then the server
-  cannot record or mix without the keys.
+- Encryption runs **between WebRTC endpoints**. In a two-person call that is end to end; a TURN
+  server only forwards encrypted packets and cannot read them. But an SFU is itself a WebRTC
+  endpoint, so it decrypts the media it receives and encrypts it again for each receiver. For
+  **end-to-end encryption**, the app encrypts each frame again before sending. Browsers expose the
+  encoded frames through the WebRTC Encoded Transform API (an earlier Chrome version was called
+  "insertable streams"); the IETF SFrame format is one standard way to encrypt them. The keys are
+  shared between participants, never with the server, so the server cannot record or mix the media.
 
 ## Group calls: mesh, SFU and MCU
 
@@ -195,8 +204,9 @@ example):
 Mesh fails on **upload** and CPU, because the browser usually encodes the video once per
 connection. It is fine for two people and tolerable for three or four. The SFU is the usual choice;
 its weak spots, client **download** and server outbound traffic, grow with N. The MCU is easy on
-clients, but decoding and re-encoding every stream costs a lot of server CPU and adds delay. Today it
-is mostly used to connect phones and older systems that expect one mixed stream.
+clients, but decoding and re-encoding every stream costs a lot of server CPU and adds delay. Today
+mixing is typically used where a client can only handle one stream, for example phone dial-in or
+older conference-room systems.
 
 ## Simulcast and SVC: the right quality for each viewer
 
@@ -205,14 +215,14 @@ their network can carry, without decoding anything:
 
 - **Simulcast:** the sender encodes the camera at two or three sizes and sends all of them. For each
   viewer the SFU forwards one: large for the active speaker, small for thumbnails, none for people
-  scrolled out of view. The small copies add little upload.
+  scrolled out of view. The small copies cost only a modest amount of extra upload.
 - **SVC** (Scalable Video Coding): the sender produces one stream built in **layers**. The base layer
   works alone; extra layers add frame rate or resolution. The SFU drops layers per viewer. VP9 and AV1
-  support this; browser support varies, so test first.
+  can add both kinds of layers, VP8 only frame-rate layers. Browser support varies, so test first.
 
 When the SFU switches a viewer to another layer, the decoder needs a **keyframe** (a full picture that
 does not depend on earlier frames), so the SFU asks the sender for one. SFUs can also cap how many
-videos they forward; Jitsi calls this "Last N": video only for the N most recent speakers.
+videos they forward; Jitsi calls this "Last N": video only for the N most recently active speakers.
 
 ## Data channels
 
@@ -250,11 +260,13 @@ and encryption CPU. Load-test with real or headless browsers rather than trustin
 server" number.
 
 - **Room placement.** Usually a whole room lives on one SFU. A coordination service records which
-  SFU hosts each room, and signaling tells clients where to connect. Moving a live call forces every client to reconnect, so for deploys you **drain** servers:
-  no new rooms, then wait for calls (which can last hours) to end. See
+  SFU hosts each room, and signaling tells clients where to connect. Moving a live call forces every
+  client to reconnect, so for deploys you **drain** servers: no new rooms, then wait for calls
+  (which can last hours) to end. See
   [zero-downtime deployments](/posts/deployment-strategies-and-zero-downtime-migrations).
 - **Networking.** Clients send UDP straight to the SFU, so each SFU needs a public IP in its ICE
-  candidates and open UDP ports. An HTTP load balancer cannot sit in the media path.
+  candidates and open UDP ports. On a cloud VM that only sees a private IP, you configure the public
+  IP in the SFU's settings. An HTTP load balancer cannot sit in the media path.
 - **Cascading.** When a room outgrows one server or spans continents, SFUs forward streams to each
   other:
 
@@ -275,9 +287,10 @@ is shared across servers. Jitsi has described cascaded bridges under the name "O
 1. **Per-track.** The SFU forwards each participant's packets to a recorder that saves them without
    re-encoding. Cheap, but merging tracks into one video is a later
    [background job](/posts/background-jobs-and-cron), and syncing tracks with gaps is tricky.
-2. **Composite.** A headless browser joins as a hidden participant, renders the layout, and its screen
-   and audio are encoded into one file or stream. Jitsi's Jibri and LiveKit Egress work this way. It
-   is CPU-heavy, like an MCU, so give recorders their own machines.
+2. **Composite.** A browser with no real screen (headless, or drawing to a virtual display) joins as
+   a hidden participant and renders the layout. Its picture and sound are encoded into one file or
+   stream. Jitsi's Jibri and LiveKit's room-composite Egress work this way. It is CPU-heavy, like an
+   MCU, so give recorders their own machines.
 
 Either way, tell participants they are being recorded; in many places the law requires it.
 
@@ -290,8 +303,9 @@ Either way, tell participants they are being recorded; in many places the law re
 
 ## In practice: a checklist
 
-- [ ] Two people: peer to peer, TURN as fallback. Three or more: an SFU.
-- [ ] TURN on UDP 3478 and TLS 443, with short-lived credentials.
+- [ ] Two people: peer to peer, TURN as fallback. Three or more: usually an SFU.
+- [ ] TURN on UDP 3478 and TLS 443, with short-lived credentials. (If your web server already uses
+      port 443, TURN usually needs its own IP address.)
 - [ ] Signaling over `wss://`, with authentication and room authorisation.
 - [ ] Simulcast (or SVC) in group calls; only visible videos forwarded.
 - [ ] SFUs close to users, rooms placed by load, draining for deploys.
