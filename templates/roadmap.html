@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block content %}
+<header class="page-header">
+  <h1>The backend roadmap</h1>
+  <p class="lead">
+    You can't learn something you don't know exists. This is a map of what backend engineers run into
+    in production — from how a database lays out bytes on disk to how a deploy pipeline handles a 2 a.m. hotfix.
+    Topics without an article yet are listed anyway, so you know they're out there.
+  </p>
+  <div class="progress">
+    {# A real <progress> element: no inline styles needed (our CSP forbids them). #}
+    <progress value="{{ written }}" max="{{ total }}" aria-label="Topics written">{{ written }} / {{ total }}</progress>
+    <p class="muted">{{ written }} of {{ total }} topics written. <a href="/vote">Vote</a> for what comes next.</p>
+  </div>
+</header>
+
+<div class="roadmap">
+  {% for section in sections %}
+  <section class="roadmap-section">
+    <header>
+      <h2><span class="roadmap-step">{{ loop.index }}</span> {{ section.title }}</h2>
+      {% if !section.description.is_empty() %}<p>{{ section.description }}</p>{% endif %}
+    </header>
+    <ul class="topic-list">
+      {% for topic in section.topics %}
+      <li class="topic {% if topic.href.is_some() %}is-written{% else %}is-missing{% endif %}">
+        {% if let Some(href) = topic.href %}
+          <a href="{{ href }}"><span class="topic-dot" aria-hidden="true">✓</span>{{ topic.title }}</a>
+        {% else %}
+          <span><span class="topic-dot" aria-hidden="true">○</span>{{ topic.title }} <span class="badge badge-muted">not written yet</span></span>
+        {% endif %}
+        {% if !topic.note.is_empty() %}<p class="topic-note">{{ topic.note }}</p>{% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% endfor %}
+</div>
+{% endblock %}

@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="error-page">
+  <p class="error-code">{{ status }}</p>
+  <h1>{{ message }}</h1>
+  <p>
+    {% if status == 401 %}<a class="btn" href="/login">Log in</a>{% endif %}
+    <a class="btn btn-ghost" href="/">Back to articles</a>
+  </p>
+</section>
+{% endblock %}

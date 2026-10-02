@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block content %}
+<header class="page-header">
+  <h1>What should we write next?</h1>
+  <p class="lead">
+    Every few days a vote round opens for a handful of tags. Suggest an article you wish existed and vote for
+    the ideas you'd read. The winners get written next. No account needed — each network gets
+    {{ max_votes }} votes and {{ max_suggestions }} suggestions per poll.
+  </p>
+</header>
+
+{% for block in open %}
+<section class="round">
+  <header class="round-head">
+    <div>
+      <h2><a href="/vote/rounds/{{ block.round.id }}">{{ block.round.title }}</a></h2>
+      {% if !block.round.description.is_empty() %}<p>{{ block.round.description }}</p>{% endif %}
+    </div>
+    <span class="badge badge-live">Open · {{ block.round.time_label() }}</span>
+  </header>
+  <div class="poll-grid">
+    {% for pv in block.polls %}{% include "partials/poll.html" %}{% endfor %}
+  </div>
+</section>
+{% else %}
+<div class="empty">
+  <p><b>No round is open right now.</b></p>
+  <p>Rounds open regularly — check back soon, or see past results below. Want to help write the winners? See <a href="/about">how to contribute</a>.</p>
+</div>
+{% endfor %}
+
+{% if !past.is_empty() %}
+<section class="past-rounds">
+  <h2>Past rounds</h2>
+  {% for pr in past %}
+  <article class="past-round">
+    <header>
+      <h3><a href="/vote/rounds/{{ pr.round.id }}">{{ pr.round.title }}</a></h3>
+      <span class="muted small">{{ pr.round.time_label() }} · {{ pr.round.suggestion_count }} suggestions</span>
+    </header>
+    <ul class="winners">
+      {% for w in pr.winners %}
+      <li>
+        <span class="tag">#{{ w.tag_name }}</span>
+        {% if let Some(title) = w.title %}
+          <b>{{ title }}</b>
+          {% if let Some(slug) = w.post_slug %}
+            — <a href="/posts/{{ slug }}">✓ read it</a>
+          {% else %}
+            <span class="badge badge-muted">being written</span>
+          {% endif %}
+        {% else %}
+          <span class="muted">no votes</span>
+        {% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+  </article>
+  {% endfor %}
+</section>
+{% endif %}
+{% endblock %}

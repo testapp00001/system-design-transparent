@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="auth-card">
+  <h1>Log in</h1>
+  <p class="muted">Welcome back. Saved articles are waiting.</p>
+  {% if let Some(err) = error %}<p class="alert alert-error" role="alert">{{ err }}</p>{% endif %}
+  <form method="post" action="/login" class="form-stack">
+    <input type="hidden" name="next" value="{{ next }}">
+    <label>Username
+      <input name="username" value="{{ username }}" autocomplete="username" required autofocus maxlength="32">
+    </label>
+    <label>Password
+      <input type="password" name="password" autocomplete="current-password" required maxlength="128">
+    </label>
+    <button type="submit" class="btn btn-block">Log in</button>
+  </form>
+  <p class="muted">New here? <a href="/register?next={{ next|urlencode_strict }}">Create an account</a> — username and password only.</p>
+</section>
+{% endblock %}

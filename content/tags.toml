@@ -1,0 +1,112 @@
+# Every tag used by an article must be declared here.
+# Vote rounds are opened per tag, so a tag can exist before any article uses it.
+
+[[tag]]
+slug = "backend"
+name = "Backend"
+description = "General server-side engineering: what happens after the request leaves the browser."
+
+[[tag]]
+slug = "system-design"
+name = "System design"
+description = "Putting the pieces together: requirements, estimates, components and trade-offs."
+
+[[tag]]
+slug = "architecture"
+name = "Architecture"
+description = "How to organise code and services: layers, boundaries, monoliths and beyond."
+
+[[tag]]
+slug = "database"
+name = "Databases"
+description = "Storage engines, indexes, transactions, replication and choosing the right database."
+
+[[tag]]
+slug = "postgresql"
+name = "PostgreSQL"
+description = "Internals and practical tips for the world's most loved open-source relational database."
+
+[[tag]]
+slug = "mysql"
+name = "MySQL"
+description = "InnoDB internals and how MySQL differs from other relational databases."
+
+[[tag]]
+slug = "nosql"
+name = "NoSQL"
+description = "Key-value, document, wide-column, graph and other non-relational stores."
+
+[[tag]]
+slug = "caching"
+name = "Caching"
+description = "Making reads cheap: cache patterns, invalidation, Redis and CDNs."
+
+[[tag]]
+slug = "networking"
+name = "Networking"
+description = "TCP, UDP, HTTP, DNS, TLS — the plumbing every request travels through."
+
+[[tag]]
+slug = "realtime"
+name = "Real-time"
+description = "Polling, SSE, WebSockets and pushing data to clients at scale."
+
+[[tag]]
+slug = "api-design"
+name = "API design"
+description = "REST, gRPC, GraphQL, pagination, versioning and contracts between systems."
+
+[[tag]]
+slug = "distributed-systems"
+name = "Distributed systems"
+description = "What changes when one machine becomes many: consistency, consensus, failure."
+
+[[tag]]
+slug = "microservices"
+name = "Microservices"
+description = "Splitting systems into services — when it helps, when it hurts, and how they talk."
+
+[[tag]]
+slug = "messaging"
+name = "Queues & streams"
+description = "Message queues, event logs, background jobs and asynchronous processing."
+
+[[tag]]
+slug = "reliability"
+name = "Reliability"
+description = "Retries, timeouts, idempotency, circuit breakers and designing for failure."
+
+[[tag]]
+slug = "scalability"
+name = "Scalability"
+description = "Load balancing, horizontal scaling, sharding and handling more traffic."
+
+[[tag]]
+slug = "performance"
+name = "Performance"
+description = "Latency, throughput and finding out where the time actually goes."
+
+[[tag]]
+slug = "devops"
+name = "DevOps & delivery"
+description = "CI/CD pipelines, deployment strategies, hotfixes and infrastructure."
+
+[[tag]]
+slug = "containers"
+name = "Containers"
+description = "Docker, Compose, Swarm and Kubernetes."
+
+[[tag]]
+slug = "security"
+name = "Security"
+description = "Authentication, sessions, passwords and protecting users' data."
+
+[[tag]]
+slug = "observability"
+name = "Observability"
+description = "Logs, metrics, traces, SLOs and knowing what production is doing."
+
+[[tag]]
+slug = "case-study"
+name = "Case studies"
+description = "How real companies solved real scaling problems, from their own engineering blogs."

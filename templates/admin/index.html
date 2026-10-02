@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block content %}
+<header class="page-header">
+  <h1>Admin</h1>
+  <p class="muted">Open vote rounds and moderate suggestions. Articles themselves are managed through Git — edit <code>content/</code> and redeploy.</p>
+</header>
+
+{% if let Some(err) = error %}<p class="alert alert-error" role="alert">{{ err }}</p>{% endif %}
+
+<section class="panel">
+  <h2>Open a new vote round</h2>
+  <form method="post" action="/admin/rounds" class="form-stack">
+    <label>Title
+      <input name="title" required maxlength="120" placeholder="e.g. Week 12: what should we write next?">
+    </label>
+    <label>Description <span class="muted">(optional)</span>
+      <textarea name="description" rows="2" maxlength="500" placeholder="Any context for voters"></textarea>
+    </label>
+    <fieldset>
+      <legend>Tags — one poll per tag (1–6)</legend>
+      <div class="checkbox-grid">
+        {% for t in tags %}
+        <label class="checkbox"><input type="checkbox" name="tags" value="{{ t.slug }}"> #{{ t.slug }} <span class="muted">({{ t.post_count }})</span></label>
+        {% endfor %}
+      </div>
+    </fieldset>
+    <label>Duration
+      <select name="duration_hours">
+        <option value="24">1 day</option>
+        <option value="72" selected>3 days</option>
+        <option value="168">1 week</option>
+        <option value="336">2 weeks</option>
+      </select>
+    </label>
+    <button type="submit" class="btn">Open round</button>
+  </form>
+</section>
+
+<section class="panel">
+  <h2>Rounds</h2>
+  {% if rounds.is_empty() %}
+  <p class="muted">No rounds yet.</p>
+  {% else %}
+  <div class="table-wrap">
+    <table class="data-table">
+      <thead><tr><th>Round</th><th>Tags</th><th>Status</th><th>Suggestions</th><th></th></tr></thead>
+      <tbody>
+      {% for r in rounds %}
+        <tr>
+          <td>{{ r.title }}</td>
+          <td>{{ r.tag_names|join(", ") }}</td>
+          <td>{% if r.is_open() %}<span class="badge badge-live">open</span>{% else %}<span class="badge badge-muted">closed</span>{% endif %} {{ r.time_label() }}</td>
+          <td>{{ r.suggestion_count }}</td>
+          <td><a href="/admin/rounds/{{ r.id }}">Manage →</a></td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+</section>
+{% endblock %}

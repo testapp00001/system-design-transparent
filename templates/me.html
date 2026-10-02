@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block content %}
+<header class="page-header">
+  <h1>{{ layout.title }}</h1>
+  <nav class="tabs" aria-label="Your articles">
+    <a href="/me?tab=saved" {% if tab == "saved" %}aria-current="page"{% endif %}>★ Saved</a>
+    <a href="/me?tab=liked" {% if tab == "liked" %}aria-current="page"{% endif %}>♥ Liked</a>
+    <a href="/me?tab=upvoted" {% if tab == "upvoted" %}aria-current="page"{% endif %}>▲ Upvoted</a>
+  </nav>
+</header>
+<div class="card-list">
+  {% for card in cards %}
+    {% include "partials/card.html" %}
+  {% else %}
+    <div class="empty">
+      <p>Nothing {{ tab }} yet.</p>
+      <p><a href="/">Browse articles</a> or follow the <a href="/roadmap">roadmap</a>.</p>
+    </div>
+  {% endfor %}
+</div>
+{% endblock %}

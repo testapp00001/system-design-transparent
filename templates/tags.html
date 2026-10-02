@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block content %}
+<header class="page-header">
+  <h1>Tags</h1>
+  <p class="lead">Every article is tagged by area. Vote rounds are organised around these tags too.</p>
+</header>
+<div class="tag-grid">
+  {% for t in tags %}
+  <a class="tag-card {% if t.post_count == 0 %}is-empty{% endif %}" href="/?tag={{ t.slug }}">
+    <span class="tag-card-name">#{{ t.slug }}</span>
+    <span class="tag-card-title">{{ t.name }}</span>
+    {% if !t.description.is_empty() %}<span class="tag-card-desc">{{ t.description }}</span>{% endif %}
+    <span class="tag-card-count">{% if t.post_count == 0 %}No articles yet{% else %}{{ t.post_count }} article{% if t.post_count != 1 %}s{% endif %}{% endif %}</span>
+  </a>
+  {% endfor %}
+</div>
+{% endblock %}

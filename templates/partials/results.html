@@ -1,0 +1,23 @@
+<section id="results" class="results" aria-live="polite">
+  <p class="results-meta">
+    {% if results.q.is_empty() %}{{ results.total }} article{% if results.total != 1 %}s{% endif %}
+    {% else %}{{ results.total }} result{% if results.total != 1 %}s{% endif %} for “{{ results.q }}”{% endif %}
+  </p>
+  <div class="card-list">
+  {% for card in results.cards %}
+    {% include "partials/card.html" %}
+  {% else %}
+    <div class="empty">
+      <p><b>Nothing here yet.</b></p>
+      <p>Wish this topic existed? <a href="/vote">Suggest it in the next vote round</a> — or write it yourself, it's open source.</p>
+    </div>
+  {% endfor %}
+  </div>
+  {% if results.pages > 1 %}
+  <nav class="pager" aria-label="Pagination">
+    {% if let Some(href) = results.prev_href %}<a class="btn btn-ghost btn-sm" href="{{ href }}" rel="prev">← Newer</a>{% else %}<span></span>{% endif %}
+    <span class="muted">Page {{ results.page }} of {{ results.pages }}</span>
+    {% if let Some(href) = results.next_href %}<a class="btn btn-ghost btn-sm" href="{{ href }}" rel="next">Older →</a>{% else %}<span></span>{% endif %}
+  </nav>
+  {% endif %}
+</section>

@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="auth-card">
+  <h1>Create an account</h1>
+  <p class="muted">Only a username and a password. No email, no tracking. Accounts let you save, like and upvote articles — reading and voting on topics never need one.</p>
+  {% if let Some(err) = error %}<p class="alert alert-error" role="alert">{{ err }}</p>{% endif %}
+  <form method="post" action="/register" class="form-stack">
+    <input type="hidden" name="next" value="{{ next }}">
+    <label>Username
+      <input name="username" value="{{ username }}" autocomplete="username" required autofocus
+             minlength="3" maxlength="32" pattern="[A-Za-z0-9_\-]+" title="Letters, numbers, _ and -">
+      <span class="field-hint">3–32 characters: letters, numbers, _ and -</span>
+    </label>
+    <label>Password
+      <input type="password" name="password" autocomplete="new-password" required minlength="8" maxlength="128">
+      <span class="field-hint">At least 8 characters. There is no email reset, so use a password manager.</span>
+    </label>
+    <label>Confirm password
+      <input type="password" name="password_confirm" autocomplete="new-password" required minlength="8" maxlength="128">
+    </label>
+    <button type="submit" class="btn btn-block">Create account</button>
+  </form>
+  <p class="muted">Already have one? <a href="/login?next={{ next|urlencode_strict }}">Log in</a></p>
+</section>
+{% endblock %}

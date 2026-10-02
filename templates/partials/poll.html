@@ -1,0 +1,57 @@
+<div class="poll" id="poll-{{ pv.poll.id }}">
+  <header class="poll-head">
+    <h3><a class="tag" href="/?tag={{ pv.poll.tag_slug }}">#{{ pv.poll.tag_slug }}</a> <span>{{ pv.poll.tag_name }}</span></h3>
+    {% if pv.open %}
+    <span class="votes-left" title="Votes are limited per network (IP address)">{{ pv.votes_left() }} of {{ pv.max_votes }} votes left</span>
+    {% endif %}
+  </header>
+
+  {% if let Some(err) = pv.error %}<p class="alert alert-error" role="alert">{{ err }}</p>{% endif %}
+  {% if let Some(notice) = pv.notice %}<p class="alert alert-ok" role="status">{{ notice }}</p>{% endif %}
+
+  <ol class="suggestions">
+  {% for s in pv.suggestions %}
+    <li class="suggestion {% if s.is_leader %}is-leader{% endif %} {% if s.is_hidden %}is-hidden{% endif %}">
+      {% if pv.open && !s.is_hidden %}
+      <form method="post" action="/vote/suggestions/{{ s.id }}/vote"
+            hx-post="/vote/suggestions/{{ s.id }}/vote" hx-target="#poll-{{ pv.poll.id }}" hx-swap="outerHTML" hx-disabled-elt="find button">
+        <input type="hidden" name="on" value="{% if s.voted %}0{% else %}1{% endif %}">
+        <button type="submit" class="vote-btn {% if s.voted %}is-on{% endif %}" aria-pressed="{{ s.voted }}"
+                title="{% if s.voted %}Remove your vote{% else %}Vote for this{% endif %}">
+          <span aria-hidden="true">▲</span><span class="vote-count">{{ s.vote_count }}</span><span class="sr-only"> votes</span>
+        </button>
+      </form>
+      {% else %}
+      <div class="vote-btn is-static"><span aria-hidden="true">▲</span><span class="vote-count">{{ s.vote_count }}</span><span class="sr-only"> votes</span></div>
+      {% endif %}
+      <div class="suggestion-body">
+        <p class="suggestion-title">
+          {{ s.title }}
+          {% if s.is_leader %}<span class="badge">{% if pv.open %}Leading{% else %}Winner{% endif %}</span>{% endif %}
+          {% if s.is_hidden %}<span class="badge badge-muted">hidden</span>{% endif %}
+        </p>
+        {% if !s.details.is_empty() %}<p class="suggestion-details">{{ s.details }}</p>{% endif %}
+        {% if let Some(slug) = s.fulfilled_slug %}
+        <p class="fulfilled">✓ Written: <a href="/posts/{{ slug }}">{% if let Some(t) = s.fulfilled_title %}{{ t }}{% else %}{{ slug }}{% endif %}</a></p>
+        {% endif %}
+      </div>
+    </li>
+  {% else %}
+    <li class="suggestion-empty">No suggestions yet.{% if pv.open %} Be the first!{% endif %}</li>
+  {% endfor %}
+  </ol>
+
+  {% if pv.can_suggest() %}
+  <form class="suggest-form" method="post" action="/vote/polls/{{ pv.poll.id }}/suggestions"
+        hx-post="/vote/polls/{{ pv.poll.id }}/suggestions" hx-target="#poll-{{ pv.poll.id }}" hx-swap="outerHTML" hx-disabled-elt="find button">
+    <label class="sr-only" for="title-{{ pv.poll.id }}">Suggested article title</label>
+    <input id="title-{{ pv.poll.id }}" name="title" required minlength="5" maxlength="120"
+           placeholder="An article you wish existed, e.g. “How Postgres VACUUM works”">
+    <label class="sr-only" for="details-{{ pv.poll.id }}">Details (optional)</label>
+    <textarea id="details-{{ pv.poll.id }}" name="details" maxlength="1000" rows="2" placeholder="Optional: what should it cover? Any good sources?"></textarea>
+    <button type="submit" class="btn btn-sm">Suggest topic</button>
+  </form>
+  {% else if pv.open %}
+  <p class="muted small">Your network has used all {{ pv.max_suggestions }} suggestions for this poll — you can still vote.</p>
+  {% endif %}
+</div>
