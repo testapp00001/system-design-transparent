@@ -57,11 +57,11 @@ Fire-and-forget is live radio; durable is a podcast that waits for you.
 Many teams already run Redis, so this is a natural first try:
 
 ```text
-SUBSCRIBE room:42                       # connection 1
-PSUBSCRIBE room:*                       # pattern subscription (glob-style)
+SUBSCRIBE room:42                       # connection 1: one channel
+PSUBSCRIBE room:*                       # connection 2: pattern subscription (glob-style)
 
-PUBLISH room:42 "{\"text\":\"hi\"}"     # connection 2
-(integer) 3                             # subscribers that received it
+PUBLISH room:42 "{\"text\":\"hi\"}"     # connection 3
+(integer) 2                             # number of clients that received it
 ```
 
 Inside Redis there is no queue. The server keeps a map from channel to subscribed connections.
@@ -80,11 +80,14 @@ Inside Redis there is no queue. The server keeps a map from channel to subscribe
 ### Redis Cluster and sharded pub/sub
 
 In Redis Cluster, classic `PUBLISH` is a broadcast: every message goes to **every node**, because a
-subscriber could be connected to any of them. Adding nodes adds no pub/sub capacity.
+subscriber could be connected to any of them. Adding nodes does not add pub/sub capacity; it only
+adds more nodes that must handle every message.
 
 **Redis 7.0 added sharded pub/sub.** `SSUBSCRIBE` and `SPUBLISH` hash the channel name to a slot,
 like a key. The message stays inside the shard that owns the slot (its primary and replicas), so
-capacity grows with the number of shards. The cost: there are no pattern subscriptions.
+capacity grows with the number of shards. The costs: there are no pattern subscriptions, a
+subscriber must connect to a node of the right shard (cluster-aware client libraries do this), and
+all channels in one `SSUBSCRIBE` call must hash to the same slot.
 
 ## Redis Streams: a durable log inside Redis
 
@@ -93,14 +96,16 @@ log stored under a key. Each entry gets an ID made of a millisecond timestamp an
 Entries stay until you trim them.
 
 ```text
+XGROUP CREATE orders billing $ MKSTREAM                   # group reads entries added from now on
+
 XADD orders MAXLEN ~ 100000 * order_id 1042 status paid   # append, keep ~100k entries
 "1727870000000-0"
 
-XGROUP CREATE orders billing $ MKSTREAM                   # group starts at new entries
+# worker-1 reads up to 10 new entries, waiting up to 5 s
 XREADGROUP GROUP billing worker-1 COUNT 10 BLOCK 5000 STREAMS orders >
 XACK orders billing 1727870000000-0                       # done with this entry
 
-# take over entries another worker left unacknowledged for 60 s
+# take over entries another worker left unacknowledged for 60 s (Redis 6.2+)
 XAUTOCLAIM orders billing worker-2 60000 0-0 COUNT 10
 ```
 
@@ -113,8 +118,8 @@ The limits come from Redis itself:
 
 - **Memory.** The stream lives in RAM. Always trim (`MAXLEN` or `MINID`).
 - **Durability is your Redis configuration.** Streams reach disk only through RDB snapshots or the
-  AOF log. With `appendfsync everysec`, a crash can lose about the last second of writes, and
-  asynchronous replication means a failover can lose recent entries too.
+  AOF log (AOF is off by default). With AOF and `appendfsync everysec`, a crash can lose about the
+  last second of writes, and asynchronous replication means a failover can lose recent entries too.
 - **One stream lives on one shard**, because it is one key. Split hot streams yourself.
 
 Streams fit modest durable queues when you already run Redis. They are awkward as a live backplane
@@ -142,8 +147,9 @@ nats pub chat.room.42 'hi'
 
 Delivery is **at-most-once**: the NATS documentation states that a message is not received if no
 subscriber is listening or active at that moment. In a NATS cluster, servers share which subjects
-their clients want and forward messages only where there is interest. Slow consumers are
-disconnected, as in Redis.
+their clients want and forward messages only where there is interest. As in Redis, the server
+disconnects a **slow consumer** (a subscriber that cannot keep up); client libraries can also drop
+messages when their local buffer is full.
 
 ### JetStream: persistence and replay
 
@@ -158,6 +164,12 @@ disconnected, as in Redis.
 - **Retention** by limits (age, count, size), by consumer *interest*, or as a *work queue*, plus
   per-subject limits such as "keep the last 100 messages of each room".
 - **Deduplication** of publishes with the same `Nats-Msg-Id` header within a time window.
+
+One caveat: the NATS documentation explains that, by default, file-based streams are not `fsync`ed
+to disk after every message; the server syncs on an interval (`sync_interval`, two minutes by
+default). Replication protects
+you against most failures; if you need every message on disk before the acknowledgement, set
+`sync_interval: always` and accept slower writes.
 
 The attraction is one system for both lossy real-time fan-out and durable streams, on the same
 subjects.
@@ -189,8 +201,8 @@ on unreliable, low-bandwidth networks. Brokers include Eclipse Mosquitto, EMQX, 
 - **QoS** (quality of service): 0 = at most once, 1 = at least once, 2 = exactly once, between one
   client and the broker, not end to end.
 - **Retained messages** give new subscribers the last value at once; a **last will** message is
-  published when a device disconnects unexpectedly; **persistent sessions** keep messages for
-  offline devices.
+  published when a device disconnects unexpectedly; **persistent sessions** keep QoS 1 and 2
+  messages for offline devices.
 
 ## Pub/sub as the backplane between WebSocket gateways
 
@@ -217,17 +229,22 @@ This is the *two-level fan-out* from [scaling WebSockets](/posts/scaling-websock
 subscribes when its first local user joins a room and unsubscribes when the last one leaves:
 
 ```python
+from collections import defaultdict
+
 members = defaultdict(set)        # room_id -> local connections
+subscribed = set()                # rooms this gateway is subscribed to
 
 async def join(conn, room_id):
-    if not members[room_id]:
-        await broker.subscribe(f"room.{room_id}")   # first local member
     members[room_id].add(conn)
+    if room_id not in subscribed:  # first local member (or the grace period already ended)
+        subscribed.add(room_id)
+        await broker.subscribe(f"room.{room_id}")
 
 async def leave(conn, room_id):
     members[room_id].discard(conn)
     if not members[room_id]:
-        schedule_unsubscribe(room_id, after_seconds=30)  # skipped if someone rejoined
+        # after 30 s: if the room is still empty, unsubscribe and remove it from `subscribed`
+        schedule_unsubscribe(room_id, after_seconds=30)
 
 async def on_broker_message(room_id, payload):
     frame = encode_websocket_frame(payload)   # encode once, send many
@@ -244,7 +261,8 @@ reconnect elsewhere within seconds, and other gateways subscribe to thousands of
 control it:
 
 - **Delay unsubscribes** by a grace period: users often come back within seconds.
-- **Batch subscriptions**: `SUBSCRIBE` accepts many channels in one command.
+- **Batch subscriptions**: `SUBSCRIBE` accepts many channels in one command (for `SSUBSCRIBE`, only
+  channels in the same slot).
 - **Reconnect clients with backoff and jitter** (see [retries and timeouts](/posts/retries-timeouts-and-idempotency)).
 - **Choose topic granularity on purpose:**
 
@@ -283,7 +301,8 @@ broker disconnect, a gateway must resubscribe to all its topics and tell its cli
 - **Many services, wildcards, request/reply, durability where needed** → NATS plus JetStream.
 - **Many teams, high volume, days of retention and replay** → Kafka.
 - **The clients are devices** → an MQTT broker, bridged into the backend.
-- **One small app on Postgres** → `LISTEN/NOTIFY` may be enough before adding any broker.
+- **One small app on Postgres** → `LISTEN/NOTIFY` may be enough before adding any broker. It is
+  also fire-and-forget: only sessions listening at that moment get the notification.
 
 ## Common mistakes
 
@@ -299,7 +318,7 @@ broker disconnect, a gateway must resubscribe to all its topics and tell its cli
 
 ## Further reading
 
-- Redis docs: [Redis Pub/Sub](https://redis.io/docs/latest/develop/interact/pubsub/)
+- Redis docs: [Redis Pub/Sub](https://redis.io/docs/latest/develop/pubsub/)
 - Redis docs: [Redis Streams](https://redis.io/docs/latest/develop/data-types/streams/)
 - NATS docs: [Subject-based messaging](https://docs.nats.io/nats-concepts/subjects) and [JetStream](https://docs.nats.io/nats-concepts/jetstream)
 - [Apache Kafka documentation: Design](https://kafka.apache.org/documentation/#design)

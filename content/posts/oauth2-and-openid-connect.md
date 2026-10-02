@@ -67,14 +67,14 @@ Code Exchange, RFC 7636) is an extension that keeps it safe even for public clie
    - `nonce` (OIDC only): is copied into the ID token, so you can match the token to this login.
    - `code_verifier`: the PKCE secret, a random string of 43 to 128 characters.
 2. It redirects the browser to the authorization server with the `code_challenge`: the SHA-256 hash
-   of the verifier, not the verifier itself.
-3. The browser follows the redirect (line breaks added for reading):
+   of the verifier, encoded as base64url. The verifier itself is not sent.
+3. The browser follows the redirect (line breaks added for reading; the values are examples):
 
    ```http
    GET /authorize?response_type=code&client_id=my-app
        &redirect_uri=https%3A%2F%2Fapp.example.com%2Fcallback
        &scope=openid%20email%20profile&state=af0ifjsldkj&nonce=n-0S6_WzA2Mj
-       &code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM&code_challenge_method=S256
+       &code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM&code_challenge_method=S256 HTTP/1.1
    Host: accounts.example.com
    ```
 
@@ -127,7 +127,7 @@ RFC 6749 also defined two shortcut grants. The **OAuth 2.0 Security Best Current
 
 | Grant | How it worked | Why it is discouraged |
 |---|---|---|
-| **Implicit** (`response_type=token`) | The access token came back directly in the redirect URL | Tokens in URLs leak and can be replayed, and cannot be bound to the client. RFC 9700: SHOULD NOT be used. Use code + PKCE. |
+| **Implicit** (`response_type=token`) | The access token came back directly in the redirect URL | Tokens in URLs leak and can be replayed, and cannot be bound to the client. RFC 9700: clients SHOULD NOT use it. RFC 10017 (browser apps): MUST NOT. Use code + PKCE. |
 | **Resource owner password credentials** | The app collected the user's password and sent it to the token endpoint | It brings back the password problem, and does not work with MFA or passkeys. RFC 9700: MUST NOT be used. |
 
 Devices without a good browser or keyboard (smart TVs, command-line tools) use the **device
@@ -139,13 +139,13 @@ authorization grant** (RFC 8628) instead.
 |---|---|---|---|
 | Purpose | Call an API | Get new access tokens | Tell the client who logged in |
 | Meant for | The resource server (API) | The authorization server only | The client (your app) |
-| Format | Opaque string or JWT | Usually opaque | Always a signed JWT |
-| Lifetime | Short (minutes to an hour is common) | Longer, revocable | Short; checked once at login |
-| Sent to | The API, in `Authorization: Bearer …` | The token endpoint only | Nobody; not to APIs |
+| Format | Opaque string or JWT | Usually opaque | A signed JWT |
+| Lifetime | Short (often minutes to an hour) | Longer, revocable | Short; checked once at login |
+| Sent to | The API, in `Authorization: Bearer …` | The token endpoint only | Stays in the client; never sent to APIs |
 
 An access token is a **bearer token** (RFC 6750): whoever holds it can use it, like cash. DPoP
-(RFC 9449) and mutual TLS can bind a token to a key the client holds, so a stolen token alone is
-useless. For public clients, RFC 9700 requires refresh tokens to be either bound like this or
+(RFC 9449) and mutual TLS (RFC 8705) can bind a token to a key the client holds, so a stolen token
+alone is useless. For public clients, RFC 9700 requires refresh tokens to be either bound like this or
 **rotated**: each use returns a new refresh token and invalidates the old one.
 
 ### Scopes
@@ -168,6 +168,7 @@ OIDC reuses the code flow above. You add the scope `openid`, and you get three e
   "iss": "https://accounts.example.com",
   "sub": "248289761001",
   "aud": "my-app",
+  "iat": 1790000000,
   "exp": 1790003600,
   "nonce": "n-0S6_WzA2Mj",
   "email": "ana@example.com",
@@ -175,16 +176,19 @@ OIDC reuses the code flow above. You add the scope `openid`, and you get three e
 }
 ```
 
-`iss` is the issuer, `aud` is your `client_id`, and `sub` (subject) is the user's id at that issuer.
-OIDC requires that `sub` is never reassigned within an issuer, so **(`iss`, `sub`)** is the key for
-the user in your database. Not the email: it can change, and not every provider verifies it.
+`iss` is the issuer, `aud` is your `client_id`, `iat` is when the token was issued, and `sub`
+(subject) is the user's id at that issuer. OIDC requires that `sub` is never reassigned within an
+issuer, so **(`iss`, `sub`)** is the key for the user in your database. Not the email: it can change,
+and not every provider verifies it. Some providers give each client a different `sub` for the same
+user ("pairwise" identifiers), so do not compare `sub` values between different apps.
 
 **2. The userinfo endpoint.** Call it with the access token to get profile claims such as name and
 picture. The scopes `profile`, `email`, `address` and `phone` control what it returns.
 
 **3. Discovery.** Each provider publishes a JSON document at
 `<issuer>/.well-known/openid-configuration` (Google's is
-`https://accounts.google.com/.well-known/openid-configuration`). Libraries read it to find the rest:
+`https://accounts.google.com/.well-known/openid-configuration`). Libraries read it to find the rest
+(shortened example):
 
 ```json
 {
@@ -199,7 +203,7 @@ picture. The scopes `profile`, `email`, `address` and `phone` control what it re
 
 ## Validating tokens
 
-Clients checking ID tokens and APIs checking JWT access tokens do the same checks:
+Clients checking ID tokens and APIs checking JWT access tokens do mostly the same checks:
 
 1. **Signature**, using the JWKS key whose `kid` (key id) matches the token header. Accept only the
    algorithms you expect, such as `RS256`. Never let the token choose, and never accept `none`.
@@ -208,7 +212,9 @@ Clients checking ID tokens and APIs checking JWT access tokens do the same check
    token.
 4. **`exp`** is in the future, with only a small clock skew allowed (seconds, not hours).
 5. **ID token:** `nonce` equals the value you stored when the login started. **Access token:** the
-   scopes allow this operation.
+   scopes allow this operation. If your provider uses the standard JWT access token format
+   (RFC 9068), also check that the header `typ` is `at+jwt`, so an ID token cannot be used as an
+   access token.
 
 With the PyJWT library in Python:
 
@@ -230,7 +236,7 @@ def verify_access_token(token: str) -> dict:
 ```
 
 Providers rotate their signing keys, so cache the JWKS and refetch it (rate-limited) when a token has
-an unknown `kid`.
+an unknown `kid`. `PyJWKClient` caches the key set and refetches it on an unknown `kid` for you.
 
 **Opaque access tokens** cannot be checked locally: the API asks the authorization server's
 **introspection endpoint** (RFC 7662) and caches the answer briefly.
@@ -263,11 +269,15 @@ Browser (SPA)              BFF (your backend)                   API (resource se
  no tokens here        tokens stored and refreshed here
 ```
 
-The IETF draft *OAuth 2.0 for Browser-Based Applications* describes this pattern and recommends it
-for business and sensitive applications. The costs: an extra hop, a server to run, and, because you
-are back to cookies, CSRF protection (`SameSite` cookies plus an origin check).
+RFC 10017, *OAuth 2.0 for Browser-Based Applications* (an IETF Best Current Practice published in
+August 2026), describes this pattern. It strongly recommends it for business applications, sensitive
+applications and applications that handle personal data. The costs: an extra hop, a server to run,
+and, because you are back to cookies, CSRF protection (for example `SameSite=Strict` cookies plus a
+custom request header that every call to the BFF must carry).
 
-Mobile apps should run code + PKCE in the **system browser**, not an embedded web view (RFC 8252).
+Mobile apps should run code + PKCE in the **system browser** (or an in-app browser tab provided by
+the operating system), not in an embedded web view. RFC 8252 says native apps MUST use such an
+external browser for the login. Inside a web view, the app could read the user's password.
 
 ## When not to use it (or not to build it yourself)
 
@@ -281,7 +291,7 @@ Mobile apps should run code + PKCE in the **system browser**, not an embedded we
 - [ ] Authorization code + PKCE (`S256`) for every flow with a user. No implicit, no password grant.
 - [ ] Redirect URIs registered and compared exactly. No wildcards.
 - [ ] `state` checked on the callback; `nonce` checked in the ID token.
-- [ ] Signature (pinned algorithms), `iss`, `aud` and `exp` validated on every token.
+- [ ] Signature (pinned algorithms), `iss`, `aud` and `exp` validated on every JWT.
 - [ ] Users keyed by (`iss`, `sub`), not by email.
 - [ ] Short-lived access tokens; refresh tokens rotated or bound to a key, never in localStorage.
 - [ ] Tokens never appear in URLs or logs.
@@ -311,4 +321,5 @@ card details there. Without `nonce`, an ID token from another login can be repla
 - RFC 9700: [Best Current Practice for OAuth 2.0 Security](https://www.rfc-editor.org/rfc/rfc9700)
 - OpenID Foundation: [OpenID Connect Core 1.0](https://openid.net/specs/openid-connect-core-1_0.html) and [OpenID Connect Discovery 1.0](https://openid.net/specs/openid-connect-discovery-1_0.html)
 - RFC 9068: [JWT Profile for OAuth 2.0 Access Tokens](https://www.rfc-editor.org/rfc/rfc9068)
-- IETF draft: [OAuth 2.0 for Browser-Based Applications](https://datatracker.ietf.org/doc/draft-ietf-oauth-browser-based-apps/)
+- RFC 10017: [OAuth 2.0 for Browser-Based Applications](https://www.rfc-editor.org/rfc/rfc10017.html)
+- RFC 8252: [OAuth 2.0 for Native Apps](https://www.rfc-editor.org/rfc/rfc8252)

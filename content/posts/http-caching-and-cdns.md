@@ -50,9 +50,9 @@ The main header is `Cache-Control`, a comma-separated list of directives such as
 | `no-cache` | Caches may store it, but must revalidate before **every** use. |
 | `no-store` | No cache may store it at all. |
 | `must-revalidate` | Once stale, never use it without a successful revalidation. |
-| `immutable` | Will not change while fresh: do not revalidate, even on reload. |
+| `immutable` | Will not change while fresh: do not revalidate, even on reload. Not every browser supports it. |
 | `stale-while-revalidate=N` | Once stale, serve it for N more seconds while refreshing it in the background. |
-| `stale-if-error=N` | If the origin fails (5xx or unreachable), serve the stale copy for N more seconds. |
+| `stale-if-error=N` | If the origin fails (500, 502, 503, 504 or no answer), serve the stale copy for up to N more seconds. |
 
 > [!WARNING]
 > `no-cache` does **not** mean "do not cache". It means "cache, but check with me every time", and
@@ -81,8 +81,9 @@ age (s)  0                     60                      90
                                background              may be served for up to one day
 ```
 
-Users never wait for a refresh, and short origin outages become invisible. Many CDNs and caching
-proxies implement both directives; browser support is partial.
+Inside the `stale-while-revalidate` window, users do not wait for a refresh, and `stale-if-error`
+can hide short origin outages. Many CDNs and caching proxies implement both directives; browser
+support is partial.
 
 ## Validation: ETag, Last-Modified and 304 Not Modified
 
@@ -94,6 +95,7 @@ request**, if the original response carried a **validator**:
 
 ```http
 GET /api/products/42 HTTP/1.1
+Host: api.example.com
 If-None-Match: "p42-v7"
 
 HTTP/1.1 304 Not Modified
@@ -118,9 +120,13 @@ def get_product(request, product_id):
     return Response(render_json(product), status=200, headers=headers)
 ```
 
+The version number only tracks the data. If a deploy changes the JSON format, put a format version
+in the ETag as well (such as `"p42-v7-f2"`), or clients keep the old shape.
+
 > [!TIP]
 > Behind a load balancer, all servers must produce the **same** ETag for the same content. ETags built
-> from machine-local details (such as file inode numbers) differ, so revalidation fails.
+> from machine-local details (such as file inode numbers) differ between servers, so a revalidation
+> that reaches another server gets a full `200` response instead of a cheap `304`.
 
 ## Vary and the cache key
 
@@ -160,11 +166,14 @@ days later (see [deployment strategies](/posts/deployment-strategies-and-zero-do
 ## CDNs: caching at the edge
 
 **Defaults differ.** Some CDNs cache only well-known static file types unless you opt in. Check what
-yours caches by default, its default cache key, and how it treats `Set-Cookie`.
+yours caches by default, its default cache key (some leave the query string out), and how it treats
+`Set-Cookie`.
 
 **Separate lifetimes.** You often want a long lifetime at the CDN, which you can purge, and a short
-one in browsers, which you cannot: `max-age=60, s-maxage=86400`. For rules that only CDNs read, there
-is `CDN-Cache-Control` (RFC 9213), supported by several CDNs, and Fastly's own `Surrogate-Control`.
+one in browsers, which you cannot: `max-age=60, s-maxage=86400`. Remember the `Age` rule: once the
+CDN copy is older than 60 seconds, browsers see it as already stale and revalidate it on each use.
+For rules that only CDNs read, there is `CDN-Cache-Control` (RFC 9213), supported by several CDNs,
+and the older `Surrogate-Control`, which Fastly reads.
 
 ### Purging (invalidation)
 
@@ -172,8 +181,8 @@ A **purge** tells the CDN to drop stored copies before their lifetime ends:
 
 - **By URL** or URL prefix.
 - **By tag.** The origin labels responses in a header (`Surrogate-Key` at Fastly, `Cache-Tag` at
-  Cloudflare), such as `product-42 category-7`. After product 42 changes, one purge call removes every
-  page that showed it.
+  Cloudflare) with tags such as `product-42` and `category-7`. After product 42 changes, one purge
+  call removes every page that showed it.
 - **Everything.** A last resort: all traffic suddenly goes to your origin.
 
 A purge reaches the CDN, not browsers. Use purges for HTML and API responses, and new URLs for
@@ -192,8 +201,8 @@ talks to the origin.
 ```
 
 CloudFront calls this Origin Shield, Fastly calls it shielding, and Cloudflare calls it Tiered Cache.
-CDNs (and nginx with `proxy_cache_lock`) also **collapse requests**: when many requests for the same
-uncached URL arrive together, one goes to the origin and the rest wait for its answer.
+Many CDNs (and nginx with `proxy_cache_lock on`) also **collapse requests**: when many requests for
+the same uncached URL arrive together, one goes to the origin and the rest wait for its answer.
 
 ### Caching API responses
 
@@ -201,8 +210,10 @@ APIs can use a CDN too, when the response is identical for everyone who requests
 catalogues, exchange rates, live scores. Even a tiny lifetime helps. With
 `s-maxage=5`, each PoP asks your origin about once per URL every 5 seconds, whether 10 or 10,000
 users are asking. This is often called **micro-caching**. Cache only `GET` and `HEAD`, and make the
-URL fully describe the response: filters, page and sort order go in the query string (see
-[API pagination and versioning](/posts/api-design-pagination-versioning)).
+URL fully describe the response: filters, page and sort order go in the query string, and the query
+string must be part of the CDN's cache key (see
+[API pagination and versioning](/posts/api-design-pagination-versioning)). Do not micro-cache data
+that must be exact at the moment it is read, such as a balance shown right before a payment.
 
 ## Never cache personalised responses publicly
 
@@ -219,17 +230,18 @@ to `/account` may get it.
 
 **`Set-Cookie` is a classic trap.** RFC 9111 does not forbid caching a response that contains
 `Set-Cookie`. If a shared cache stores one, it can hand the same cookie, perhaps a session id, to
-every later visitor. Many CDNs refuse to cache such responses by default, but that is a provider
-choice, not a rule. Watch for frameworks that start an anonymous session on every page. Never set
-cookies on cacheable responses.
+every later visitor. Many CDNs and proxies (nginx, for example) refuse to cache such responses by
+default, but that is a product choice, not a rule. Watch for frameworks that start an anonymous
+session on every page. Never set cookies on responses that a shared cache may store.
 
 A good pattern: cache the public page for everyone, and load the personal parts (name, cart count)
-from a small `/api/me` request marked `private, no-store`. For sessions in general, see
+from a small `/api/me` request marked `private, no-cache`. For sessions in general, see
 [sessions vs JWT](/posts/authentication-sessions-vs-jwt).
 
 > [!WARNING]
-> This is not a theoretical risk. Valve has described a 2015 incident in which a caching configuration
-> change caused Steam store pages with personal account details to be shown to other users.
+> This is not a theoretical risk. Valve has described a December 2015 incident in which a caching
+> configuration change, made during a denial-of-service attack, caused Steam store pages with
+> personal account details to be shown to other users.
 
 ## Debugging: read the response headers
 
@@ -244,13 +256,14 @@ curl -s -o /dev/null -D - https://www.example.com/assets/app.3f9a1c.js
 | Header | What it tells you |
 |---|---|
 | `Age` | Seconds since the origin generated or last validated the response. Missing or `0` usually means it came from the origin. |
-| `Cache-Status` | The standard header (RFC 9211), for example `ExampleCDN; hit` or `ExampleCDN; fwd=uri-miss`. |
+| `Cache-Status` | The standard header (RFC 9211), for example `ExampleCDN; hit` or `ExampleCDN; fwd=uri-miss`. Not every CDN sends it yet. |
 | `CF-Cache-Status` | Cloudflare: `HIT`, `MISS`, `EXPIRED`, `BYPASS`, `DYNAMIC` and others. |
 | `X-Cache` | CloudFront (`Hit from cloudfront`), Fastly and others; values vary by vendor. |
 
 Always a miss? Look for `Set-Cookie`, `private`, `no-store`, a wide `Vary` or unique query strings.
 `curl` only reaches the PoP nearest to you. In the browser's developer tools, keep **Disable cache**
-off and look for 304 statuses and "(disk cache)" entries in the Network tab.
+off and, in the Network tab, look for 304 statuses and responses served from the browser's cache
+(Chrome shows "(disk cache)" or "(memory cache)").
 
 ## Cheat sheet
 
@@ -270,8 +283,8 @@ off and look for 304 statuses and "(disk cache)" entries in the Network tab.
 - **`no-store` everywhere**, which throws away cheap 304 revalidations.
 - **`public` or `s-maxage` on personal responses**, or `Set-Cookie` on cacheable ones.
 - **Middleware that adds a long `max-age` to every response**, errors included.
-- **Accidental permanent redirects.** `301` and `308` are cacheable by default, and browsers may keep
-  them for a long time. Use `302` or `307` until you are sure.
+- **Accidental permanent redirects.** `301` and `308` may be cached even without a `Cache-Control`
+  header, and browsers may keep them for a long time. Use `302` or `307` until you are sure.
 
 ## Further reading
 

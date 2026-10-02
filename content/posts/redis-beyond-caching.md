@@ -6,9 +6,9 @@ level = "intermediate"
 date = 2026-10-02
 +++
 
-Most teams first use Redis as a cache: store the result of a slow query, read it back in under a
-millisecond. A year later, the same Redis instance also holds sessions, rate-limit counters, a job
-queue, a leaderboard and a list of who is online. Then it restarts during maintenance, and the team
+Most teams first use Redis as a cache: store the result of a slow query, read it back, usually in
+under a millisecond. A year later, the same Redis instance also holds sessions, rate-limit counters,
+a job queue, a leaderboard and a list of who is online. Then it restarts during maintenance, and the team
 finds out which of those things were safe to lose. This article explains what Redis offers beyond
 caching, how it works, and what can go wrong.
 
@@ -22,12 +22,14 @@ Two design choices explain most of its behaviour:
 
 - **Data lives in RAM.** Most operations take well under a millisecond. The disk is only used to
   survive restarts. Your data must fit in memory.
-- **Commands run one at a time** on one main thread (newer versions can use extra threads for network
-  I/O, but not to run commands). So every command is atomic without locks, but one slow command,
-  such as `KEYS *` on millions of keys, makes every client wait.
+- **Commands run one at a time** on one main thread. Since Redis 6.0, extra threads can read and
+  write network data, but commands still run on the main thread. So every command is atomic without
+  locks, but one slow command, such as `KEYS *` on millions of keys, makes every client wait.
 
 > [!NOTE]
-> **Valkey** is a fork of Redis (see [licensing](#licensing)). The basics here apply to both.
+> **Valkey** is a fork of Redis (see [licensing](#licensing)). The basics here apply to both. Some
+> commands in the examples (`BLMOVE`, `GEOSEARCH`, `XAUTOCLAIM`, `ZRANGE ... REV`) need Redis 6.2 or
+> newer.
 
 ## Data structures and their real uses
 
@@ -43,23 +45,26 @@ Two design choices explain most of its behaviour:
 | Bitmap | One bit per integer id | `SETBIT`, `BITCOUNT` | Daily active users |
 | Geospatial | Points on a map | `GEOADD`, `GEOSEARCH` | "Drivers within 2 km" |
 
-**Strings and counters.** A string holds up to 512 MB of any bytes. `INCR` adds to a number
+**Strings and counters.** A string holds any bytes, up to 512 MB by default. `INCR` adds to a number
 atomically, so fifty servers can increment one counter at once without losing an update. If your
 code does `GET`, adds 1, then `SET`, two servers can read the same old value and one update is lost.
 
 **Lists** make simple queues. `BLMOVE` waits for an item and moves it into a "processing" list in one
-step, so a crashed worker does not silently lose the job. Sidekiq (Ruby) and BullMQ (Node.js) build
-job queues on Redis (see [background jobs](/posts/background-jobs-and-cron)).
+step. If the worker crashes, the job is still in the processing list, so a separate check can find it
+and put it back in the queue. Without that step, a crashed worker silently loses the job. Sidekiq
+(Ruby) and BullMQ (Node.js) are popular job queue libraries built on Redis (see
+[background jobs](/posts/background-jobs-and-cron)).
 
 **Sorted sets** keep members ordered by a numeric score. Adding, updating and finding a rank are
-O(log N), so they stay fast with millions of members:
+O(log N), so they stay fast with millions of members. The last command below reads the top 2 (the
+`REV` option needs Redis 6.2; older versions use `ZREVRANGE`):
 
 ```text
 > ZADD leaderboard 1500 ana 1720 ben 980 chen
 (integer) 3
 > ZINCRBY leaderboard 50 chen
 "1030"
-> ZRANGE leaderboard 0 1 REV WITHSCORES     # top 2 (ZREVRANGE on old versions)
+> ZRANGE leaderboard 0 1 REV WITHSCORES
 1) "ben"
 2) "1720"
 3) "ana"
@@ -85,12 +90,18 @@ group "search"   (reads the same entries again, independently)
 ```
 
 ```text
-XADD orders MAXLEN ~ 1000000 * order_id 1042 total 2000
 XGROUP CREATE orders billing $ MKSTREAM
+XADD orders MAXLEN ~ 1000000 * order_id 1042 total 2000
 XREADGROUP GROUP billing worker-1 COUNT 10 BLOCK 5000 STREAMS orders >
 XACK orders billing 1790914191338-0
-XAUTOCLAIM orders billing worker-2 60000 0-0 COUNT 10   # claim entries pending > 60 s
+XAUTOCLAIM orders billing worker-2 60000 0-0 COUNT 10
 ```
+
+`$` means the new group only reads entries added after it was created. `MAXLEN ~ 1000000` keeps
+about one million entries (`~` means "about", which is cheaper than an exact trim). `>` asks for
+entries that no worker in the group has received yet. `XAUTOCLAIM` gives worker-2 the entries that
+have waited for an `XACK` for more than 60,000 ms (60 seconds), for example because their worker
+crashed.
 
 Delivery is **at least once**: a worker can crash after the work but before `XACK`, so make
 consumers [idempotent](/posts/retries-timeouts-and-idempotency). Trim with `MAXLEN`, because the
@@ -113,7 +124,9 @@ disconnected when their output buffer passes a limit.
 Use pub/sub for signals that can be lost: "room 7 has a new message, go fetch it", cache invalidation,
 or fan-out to [WebSocket servers](/posts/scaling-websockets-chat). Store the real data first, then
 publish (more in [pub/sub for real-time systems](/posts/pub-sub-redis-nats)). In Redis Cluster,
-normal pub/sub messages go to every node; Redis 7.0 added **sharded pub/sub** (`SPUBLISH`).
+normal pub/sub messages are sent to every node, which adds traffic as the cluster grows. Redis 7.0
+added **sharded pub/sub** (`SSUBSCRIBE`, `SPUBLISH`): each channel lives only on the shard that owns
+its hash slot.
 
 ### HyperLogLog, bitmaps and geospatial
 
@@ -122,20 +135,20 @@ normal pub/sub messages go to every node; Redis 7.0 added **sharded pub/sub** (`
 - **Bitmaps** are bit operations on a string. Bit *n* means "user *n* was active today":
   `SETBIT active:2026-10-02 42 1`, then `BITCOUNT`. One million user ids fit in about 125 KB. Use
   dense integer ids: setting bit 4,000,000,000 creates a 500 MB string.
-- **Geospatial** commands store longitude/latitude in a sorted set; `GEOSEARCH` finds members in a
-  radius, sorted by distance.
+- **Geospatial** commands store longitude/latitude in a sorted set; `GEOSEARCH` finds members
+  inside a circle or a box, and sorts them by distance if you add `ASC`.
 
 ## TTLs: data that cleans itself up
 
 `SET key value EX 3600` or `EXPIRE key 3600` gives a key a **time to live** (TTL) in seconds. Redis
-deletes expired keys when they are accessed, and a background job also checks random keys with a TTL.
-Three surprises:
+deletes expired keys when they are accessed, and a background task also looks through keys that
+have a TTL and deletes the expired ones. Three surprises:
 
-- Expiry is **per key**. Items inside a list or set cannot expire on their own (Redis 7.4 added
-  per-field expiry for hashes only).
+- Expiry is **per key**. Items inside a list or set cannot expire on their own. Hashes are the
+  exception in newer versions: Redis 7.4 and Valkey 9.0 added per-field expiry (`HEXPIRE`).
 - A plain `SET` on an existing key **removes its TTL** unless you add `KEEPTTL`. `INCR` keeps it.
 - `INCR` then `EXPIRE` is two commands. If your process dies between them, the counter never
-  expires. Do both atomically.
+  expires. Do both atomically, with `MULTI`/`EXEC` or a Lua script (next section).
 
 ## Atomicity without locks
 
@@ -171,17 +184,22 @@ For locks with `SET key token NX PX 30000`, see [distributed locks](/posts/distr
 | | RDB snapshot | AOF (append-only file) |
 |---|---|---|
 | What it writes | A point-in-time copy of all data | Every write command, replayed at startup |
-| In the default `redis.conf` | On (the `save` line below) | Off (`appendonly no`) |
-| Lost in a crash | Everything since the last snapshot (minutes) | With `everysec`: about the last second |
+| Default in Redis 7 | On (the `save` values below) | Off (`appendonly no`) |
+| Lost in a crash | Everything since the last snapshot (minutes; up to an hour with the default `save` values) | With `everysec`: about the last second |
 | Restart | Fast to load | Slower; compacted by background rewrites |
 
-A setup for data you care about:
+A setup for data you care about. In `redis.conf`, a comment must be on its own line: a `#` after a
+value is read as more arguments, and Redis refuses to start.
 
 ```text
+# Log every write. fsync once per second (the default); "always" is safer but much slower.
 appendonly yes
-appendfsync everysec          # fsync every second (default); "always" is slower
-aof-use-rdb-preamble yes      # faster restarts
-save 3600 1 300 100 60 10000  # RDB snapshots too: copy them off the machine
+appendfsync everysec
+# Start the AOF with a compact snapshot, for faster restarts (the default).
+aof-use-rdb-preamble yes
+# Also take RDB snapshots: after 1 hour if 1+ keys changed, 5 min if 100+, 1 min if 10000+.
+# Copy them off the machine.
+save 3600 1 300 100 60 10000
 ```
 
 Defaults differ between packages, Docker images and managed services: check `CONFIG GET save` and
@@ -189,6 +207,9 @@ Defaults differ between packages, Docker images and managed services: check `CON
 
 - Snapshots and AOF rewrites **fork** the process. Pages that change during the save are copied, so
   a busy instance needs spare RAM while saving.
+- Leave `no-appendfsync-on-rewrite` at its default, `no`. Setting it to `yes` can lower latency, but
+  the comments in `redis.conf` warn that you can then lose up to 30 seconds of writes in the worst
+  case.
 - **Replication is asynchronous.** A write the primary confirmed may not have reached a replica when
   the primary dies; after failover it is gone, whatever your fsync setting. `WAIT` narrows this
   window, but the Redis docs say it does not make Redis strongly consistent.
@@ -199,8 +220,9 @@ Defaults differ between packages, Docker images and managed services: check `CON
   reads. Nothing fails over automatically (see
   [replication and high availability](/posts/replication-and-high-availability)).
 - **Sentinel:** separate processes watch the primary. When enough agree it is down, they promote a
-  replica and tell clients the new address. Run at least three Sentinels on separate machines. All
-  data still lives on one primary.
+  replica. Clients ask the Sentinels for the current primary's address, so they find the new one.
+  The Redis docs recommend at least three Sentinels, on machines that fail independently. All data
+  still lives on one primary.
 - **Redis Cluster:** data is split across several primaries, each with replicas and built-in
   failover. There are **16,384 hash slots**: `slot = CRC16(key) mod 16384`, and each primary owns
   some. A node asked about a slot it does not own replies `MOVED` with the right address.
@@ -229,7 +251,7 @@ longer fits one machine's RAM or one main thread is too busy (see
 ## Memory and eviction
 
 `maxmemory` sets a memory limit. On 64-bit systems the default is `0`, no limit: Redis grows until the
-machine runs out of memory. `maxmemory-policy` decides what happens at the limit:
+machine runs out of memory, and then the operating system may kill it. `maxmemory-policy` decides what happens at the limit:
 
 | Policy | What it removes | Use for |
 |---|---|---|
@@ -247,10 +269,10 @@ memory in the background.
 
 Redis was open source under the BSD licence until 2024. In March 2024, Redis Ltd. announced that
 versions from 7.4 on would use a choice of two **source-available** licences (RSALv2 or SSPLv1),
-which are not open source by the OSI definition. Soon after, the Linux Foundation announced
-**Valkey**, a fork of the last BSD-licensed version (7.2.4), supported by companies including AWS,
-Google Cloud and Oracle. In 2025, Redis 8 added the AGPLv3, an OSI-approved open source licence, as a
-third option.
+which are not open source by the OSI definition. Later that month, the Linux Foundation announced
+**Valkey**, a BSD-licensed fork of Redis 7.2.4, supported by companies including AWS, Google Cloud
+and Oracle. In May 2025, Redis 8.0 added the AGPLv3, an OSI-approved open source licence, as a third
+option.
 
 If you only use Redis inside your own application, the practical questions are which server your
 cloud provider or Linux distribution ships, and which newer features you need. If your company sells
@@ -261,8 +283,8 @@ Redis as a service or redistributes it, ask your legal team to read the licences
 Redis is a fine *only* home for data you can lose or rebuild: caches, sessions (users log in again),
 rate-limit counters, presence, leaderboards you can recompute. Keep the source of truth elsewhere when:
 
-- **Losing a write is unacceptable** (orders, payments). Snapshots lose minutes, and failover can
-  lose confirmed writes even with AOF.
+- **Losing a write is unacceptable** (orders, payments). Snapshots can lose minutes of writes, and
+  failover can lose confirmed writes even with AOF.
 - **You will need queries you did not plan.** There is no SQL and no joins; secondary indexes are
   sets you keep in sync by hand.
 - **The data is larger than RAM**, which costs far more per GB than disk.

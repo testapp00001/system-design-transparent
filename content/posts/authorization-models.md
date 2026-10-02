@@ -37,16 +37,17 @@ is misleading). `403 Forbidden` means "I understood the request, and the answer 
 
 ## Access control lists (ACLs)
 
-The oldest model: each resource carries a list of who may do what with it.
+One of the oldest models: each resource carries a list of who may do what with it.
 
 ```text
 document 42   ->  alice: owner,  bob: edit,  sales-team: view
 document 43   ->  carol: owner
 ```
 
-Unix file permissions and a "Share with..." dialog are simple ACLs. They are perfect for sharing single
-objects. They become painful for organisation-wide rules ("all accountants can read every invoice"
-means editing every invoice's list) and for the reverse question, "what can Bob access?".
+Unix file permissions (owner, group, others) and a "Share with..." dialog are simple forms of ACL.
+They are perfect for sharing single objects. They become painful for organisation-wide rules
+("all accountants can read every invoice" means editing every invoice's list) and for the reverse
+question, "what can Bob access?".
 
 ## RBAC: role-based access control
 
@@ -156,11 +157,12 @@ Your application writes tuples when something happens ("Alice shared the folder 
 asks for a check before acting. For list pages, both systems also answer "which documents can Alice
 view?" (`ListObjects` in OpenFGA, `LookupResources` in SpiceDB).
 
-The paper also solves the **"new enemy" problem**: if you remove Bob from a folder and then add a
+The paper also addresses the **"new enemy" problem**: if you remove Bob from a folder and then add a
 new file to it, a check that uses old data (for example, from a replica that is behind) must not let
-Bob see the file. In Zanzibar, the application stores a consistency token (a "zookie") with each new
-version of the content. Later checks send the token back, and Zanzibar evaluates them on data that
-is at least that fresh. SpiceDB's equivalent is the ZedToken.
+Bob see the file. In Zanzibar, when content changes, the application asks Zanzibar for a consistency
+token (a "zookie") and stores it with the new version of the content. Later checks send the token
+back, and Zanzibar evaluates them on data that is at least that fresh. SpiceDB's equivalent is the
+ZedToken.
 
 The costs: a new service on the path of almost every request, and relationships that live in two
 places (your database and the authorization store) and must stay in sync. That is the dual-write
@@ -197,11 +199,11 @@ code becomes the **Policy Enforcement Point** (it allows or blocks the request),
 ```
 
 **Open Policy Agent (OPA)** is a general-purpose engine with its own language, **Rego**. It is also
-widely used in Kubernetes, for example to reject manifests that break your rules (the Gatekeeper
-project).
+widely used in Kubernetes, for example to reject resources that break your rules when someone
+sends them to the cluster (the OPA Gatekeeper project does this).
 
 ```rego
-# Rego syntax for OPA 1.0 and later
+# Rego syntax for OPA 1.0 and later (on OPA 0.59 to 0.70, add "import rego.v1")
 package invoices
 
 default allow := false
@@ -219,12 +221,15 @@ language that is designed to be fast and easy to analyse. Anything not permitted
 `forbid` rule always wins over a `permit` rule:
 
 ```text
-permit (principal, action == Action::"approve", resource)
+permit (principal in Role::"accountant", action == Action::"approve", resource)
 when { resource.region == principal.region && resource.amount < 10000 };
 
 forbid (principal, action == Action::"approve", resource)
 when { resource.created_by == principal };
 ```
+
+Here the policy itself does the job of the role-to-permission table: it says that accountants may
+use the `approve` action. Your application tells Cedar which roles the user has when it asks.
 
 An engine gives you one place for rules, policy tests and decision logs. It usually does **not** read
 your database: you send it the attributes (the user's region, the invoice's amount) with each
@@ -254,8 +259,9 @@ For shared tables:
 
 ### A safety net in the database: PostgreSQL row-level security
 
-Row-level security (RLS) lets PostgreSQL add a filter to every query on a table. A forgotten
-`WHERE tenant_id = ...` then returns nothing, instead of every customer's data.
+Row-level security (RLS) lets PostgreSQL add a filter to every query on a table. If a query forgets
+`WHERE tenant_id = ...`, it still returns only the current tenant's rows, instead of every
+customer's data.
 
 ```sql
 ALTER TABLE invoices ENABLE ROW LEVEL SECURITY;
@@ -313,8 +319,9 @@ def get_invoice(invoice_id: int, user=Depends(current_user)):
     return invoice
 ```
 
-Returning `404` instead of `403` avoids confirming that the object exists. GitHub's REST API
-documentation says it does this in some places, so that it does not reveal private repositories.
+Returning `404` instead of `403` avoids confirming that the object exists. GitHub's
+[REST API documentation](https://docs.github.com/en/rest/using-the-rest-api/troubleshooting-the-rest-api)
+says it does this so that it does not confirm that a private repository exists.
 
 What does **not** fix it:
 

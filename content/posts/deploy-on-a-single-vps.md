@@ -7,7 +7,7 @@ date = 2026-10-02
 +++
 
 Your app works on your laptop: one `docker compose up` starts the app and its database. Now real
-users are coming. Kubernetes feels like too much, and a platform as a service (PaaS) gets expensive.
+users are coming. Kubernetes feels like too much, and a platform as a service (PaaS) can get expensive.
 The third option is one rented virtual server (a **VPS**, virtual private server) running the same
 Compose stack. It is cheap and simple, but now *you* own security updates, HTTPS, backups and deploys.
 
@@ -72,16 +72,18 @@ sshd -T | grep -E 'passwordauthentication|permitrootlogin'   # the values really
 systemctl restart ssh
 
 # firewall (SSH, HTTP, HTTPS only) and automatic security updates
-apt update && apt install ufw unattended-upgrades
+apt update && apt install sudo ufw unattended-upgrades   # sudo: missing on some minimal images
 ufw default deny incoming
 ufw allow 22/tcp && ufw allow 80/tcp && ufw allow 443/tcp
 ufw enable
 dpkg-reconfigure --priority=low unattended-upgrades
 ```
 
-Some cloud images ship a file in `/etc/ssh/sshd_config.d/` that turns password login back on, so
-check with `sshd -T`. Keep your SSH session open and test the new login from a second terminal.
-Kernel updates need a reboot; on Ubuntu, `/var/run/reboot-required` tells you when.
+Some cloud images ship a file in `/etc/ssh/sshd_config.d/` that turns password login back on.
+sshd keeps the first value it reads for each setting and reads these files in name order, so the
+`00-` prefix makes our file win. Still, check with `sshd -T`. Keep your SSH session open and test
+the new login from a second terminal. Kernel updates need a reboot; on Ubuntu,
+`/var/run/reboot-required` tells you when.
 
 > [!WARNING]
 > **Docker bypasses ufw.** Docker writes its own firewall rules. A port published with
@@ -91,8 +93,8 @@ Kernel updates need a reboot; on Ubuntu, `/var/run/reboot-required` tells you wh
 
 ## Step 2: Docker and a good image
 
-Install Docker Engine from Docker's official package repository. It includes the Compose plugin
-(`docker compose`, with a space).
+Install Docker Engine from Docker's official package repository. Docker's install guide also
+installs the Compose plugin (package `docker-compose-plugin`, command `docker compose`, with a space).
 
 - The `docker` group is **equivalent to root**: its members can mount any host folder into a
   container. Treat it like `sudo`.
@@ -179,9 +181,11 @@ example.com {
   [DNS record](/posts/dns-for-backend-developers) must already point to the server, and ports 80
   and 443 must be reachable.
 - **Reverse proxy.** Caddy forwards requests to `app` over the private Compose network. It keeps the
-  original `Host` header and adds `X-Forwarded-For`. `TRUSTED_PROXY_HOPS=1` tells the app that
-  exactly one proxy is in front. Too low, and every visitor looks like Caddy; too high, and visitors
-  can fake their IP address.
+  original `Host` header and sets `X-Forwarded-For` (the visitor's IP address). By default it
+  ignores any `X-Forwarded-For` value that the visitor sent. `TRUSTED_PROXY_HOPS=1` tells the app
+  that exactly one proxy is in front. With `0`, every visitor looks like Caddy. A number that is too
+  high is also wrong: behind a proxy that keeps the visitor's own `X-Forwarded-For` value, visitors
+  could fake their IP address.
 - **Keep `caddy_data`.** It stores the certificates. Lose it, and Caddy must request new ones, which
   can hit the certificate authority's rate limits.
 
@@ -204,7 +208,7 @@ IP_HASH_SECRET=...      # generate with: openssl rand -hex 32
 - Hex values are safe inside `DATABASE_URL`; characters such as `@` or `/` would need URL encoding.
 - Keep a copy of this file in a password manager: backups do not contain it.
 - `POSTGRES_PASSWORD` is only used on the very first start, when the volume is empty. To change the
-  password later, use SQL (`ALTER USER`).
+  password later, use SQL (`ALTER USER`), then update `.env`.
 
 See also [secrets management](/posts/secrets-management).
 
@@ -220,6 +224,7 @@ to **object storage** (S3-compatible storage) at another provider, for example w
 # /opt/sdt/backup.sh, run by cron every night:  15 3 * * * /opt/sdt/backup.sh
 set -euo pipefail
 cd /opt/sdt
+mkdir -p backups
 file="backups/sdt-$(date -u +%Y-%m-%dT%H%M).dump"
 # -T: no terminal, so the binary dump is not corrupted
 docker compose exec -T db pg_dump -U sdt --format=custom sdt > "$file"
@@ -232,23 +237,28 @@ Make the backups trustworthy:
 
 - **Alert when the job does not run.** The last line pings a "dead man's switch" monitor
   (Healthchecks.io is one example). If no ping arrives for a day, it alerts you.
-- **Use upload-only credentials.** If the server's storage key cannot delete, an attacker on the
-  server cannot destroy your backups. Let the bucket's lifecycle rules remove old files.
+- **Limit what the server's storage key can do.** Let it upload files but not delete them. A key
+  that can write can often overwrite an existing file, so also turn on versioning or object lock
+  on the bucket if your provider offers it. Then an attacker on the server cannot destroy your
+  backups. Let the bucket's lifecycle rules remove old files.
 - **Encrypt** the dump if the storage provider should not read your data (an rclone `crypt` remote,
   `age` or `gpg`).
-- **Test a restore** every month with `pg_restore --dbname=sdt_restore_test <file>`. An untested
-  backup is only a hope.
+- **Test a restore** every month. Create an empty database (for example `sdt_restore_test`,
+  ideally on another machine), run `pg_restore --no-owner --dbname=sdt_restore_test <file>`, and
+  check that your data is there. An untested backup is only a hope.
 
 **When to add WAL archiving.** With a nightly dump, you can lose up to 24 hours of data. PostgreSQL
-writes every change to its write-ahead log (WAL) first. Tools such as pgBackRest and WAL-G copy the
-WAL to object storage continuously, so you can restore to any moment, for example just before a bad
-`DELETE`. Add it when losing a day of data is not acceptable, or when the dump gets slow. Managed
+writes every change to its write-ahead log (WAL) first. Tools such as pgBackRest and WAL-G take
+regular full copies (base backups) and copy the WAL to object storage continuously, so you can
+restore to almost any moment, for example just before a bad `DELETE`. Add it when losing a day of data is not acceptable, or when the dump gets slow. Managed
 PostgreSQL services usually include it. See
 [database backups and recovery](/posts/database-backups-and-recovery).
 
 > [!WARNING]
 > Changing `postgres:17` to `postgres:18` does not upgrade your data: a new major version refuses to
 > start on the old files. Upgrade with a dump and restore (or `pg_upgrade`), after a fresh backup.
+> Also read the image's notes first: from version 18, the official image expects the volume at
+> `/var/lib/postgresql`, not `/var/lib/postgresql/data`.
 
 ## Step 6: logs and disk space
 
@@ -265,8 +275,11 @@ full, and a full disk breaks PostgreSQL. Fix it once in `/etc/docker/daemon.json
 Restart Docker, then recreate the containers (`docker compose up -d --force-recreate`): the setting
 only applies to new containers.
 
-Deploys leave old images behind. A weekly `docker image prune -a --filter "until=240h"`
-deletes unused images older than ten days, never one that a container uses.
+Deploys leave old images behind. A weekly cron job with
+`docker image prune -af --filter "until=240h"` deletes images that no container uses and that were
+created more than ten days ago (`until` looks at when the image was built, not when you pulled it).
+It never deletes an image that a container uses, even a stopped one. The `-f` skips the "are you
+sure?" question, which a cron job cannot answer.
 
 ## Step 7: monitoring that warns you before users do
 
@@ -313,7 +326,7 @@ rollback() {
 
 sed -i "s/^APP_TAG=.*/APP_TAG=$new/" .env
 docker compose pull app || rollback
-docker compose run --rm app app sync-content || rollback   # migrations, then exit
+docker compose run --rm app app sync-content || rollback   # migrate, sync articles, exit
 docker compose up -d app
 
 for i in $(seq 1 30); do
@@ -324,7 +337,8 @@ rollback
 ```
 
 - **Migrations run before the switch.** The app also migrates when it starts, but `sync-content`
-  migrates and exits. If a migration fails, the deploy stops while the old version still serves.
+  runs the migrations, loads the articles into the database, and exits. If a migration fails, the
+  deploy stops while the old version still serves.
 - **A rollback changes the code, not the database.** The old version must still work with the new
   schema: add columns first, remove them in a later deploy (see
   [zero-downtime migrations](/posts/deployment-strategies-and-zero-downtime-migrations)).
@@ -337,7 +351,8 @@ listens, and Caddy answers `502 Bad Gateway`. From cheap to more work:
 
 1. **Do slow work before the switch.** The script pulls and migrates first.
 2. **Shut down gracefully.** Docker sends `SIGTERM`, waits 10 seconds by default, then kills the
-   process. This app catches `SIGTERM` and lets running requests finish (`src/main.rs`).
+   process (`stop_grace_period` in the Compose file changes the wait). This app catches `SIGTERM`
+   and lets running requests finish (`src/main.rs`).
 3. **Let Caddy wait instead of failing.** With `lb_try_duration`, Caddy keeps trying to connect for a
    while, so requests during a short restart are only slower:
 
@@ -349,10 +364,13 @@ listens, and Caddy answers `502 Bad Gateway`. From cheap to more work:
    }
    ```
 
-4. **Two app containers.** Run `app_blue` and `app_green`, list both in `reverse_proxy` with an
-   active health check (`health_uri /healthz`), and update them one at a time. Caddy only sends
-   traffic to healthy ones. This app supports it: its README says sessions live in Postgres, and
-   migrations and background jobs use advisory locks. Tools such as Kamal automate this pattern.
+4. **Two app containers.** Run `app_blue` and `app_green` and list both in `reverse_proxy` with an
+   active health check (`health_uri /healthz`) and `lb_try_duration`. Update them one at a time,
+   and wait until the first one is healthy again before you update the second. Caddy only sends
+   traffic to healthy containers. It checks every 30 seconds by default, so `lb_try_duration`
+   covers the gap: when one container does not answer, Caddy tries again. This app supports two
+   containers: its README says sessions live in Postgres, and migrations and background jobs use
+   advisory locks. Tools such as Kamal automate a similar zero-downtime switch.
 
 For many small products, a few seconds of errors at a quiet hour is fine. Do step 4 when you deploy
 often during busy hours.

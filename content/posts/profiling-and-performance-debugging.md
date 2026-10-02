@@ -13,7 +13,7 @@ where the time goes. This article gives you a repeatable method, and the tools t
 
 ## Measure before you optimise
 
-The slow part is rarely the code that *looks* slow. So start with a measurable problem statement:
+The slow part is often not the code that *looks* slow. So start with a measurable problem statement:
 
 - **What** is slow: one endpoint, one job, the whole service?
 - **How** slow, as a percentile: "p99 is 2 s; the target is 500 ms".
@@ -67,20 +67,23 @@ method** is a checklist for that. For every resource, check:
 | Resource | Utilisation | Saturation | Errors |
 |---|---|---|---|
 | CPU | `mpstat -P ALL 1`, `top` | `vmstat 1`: `r` column above the CPU count | rare |
-| Memory | `free -m` | swapping (`vmstat` `si`/`so`), OOM kills in `dmesg` | failed allocations |
-| Disk | `iostat -xz 1`: `%util` | `iostat`: queue size, wait time | I/O errors in `dmesg` |
+| Memory | `free -m` | swapping (`vmstat` `si`/`so`), OOM (out of memory) kills in `dmesg` | failed allocations |
+| Disk | `iostat -xz 1`: `%util` | `iostat`: queue size (`aqu-sz`), wait time (`r_await`, `w_await`) | I/O errors in `dmesg` |
 | Network | `sar -n DEV 1` vs link speed | drops, TCP retransmits | interface errors |
 | Connection pool | connections in use / max | requests waiting for a connection | acquire timeouts |
 
-Saturation matters most: a resource that is 90% busy makes requests wait far longer than one at
-70%, as [queueing theory](/posts/queueing-theory-littles-law) explains.
+Watch saturation closely: queues start to grow long before a resource is 100% busy. A resource
+that is 90% busy makes requests wait far longer than one at 70%, as
+[queueing theory](/posts/queueing-theory-littles-law) explains. One caveat: for SSDs and RAID
+arrays, which serve many requests in parallel, `%util` near 100% does not mean the disk is full;
+look at the wait times and queue size instead.
 
 ## Step 3: CPU profiling and flame graphs
 
 If the time is in your own code, you need a **profiler**. There are two kinds:
 
-- **Instrumenting profilers** record every function call. Counts are exact, but the large overhead
-  distorts the timing.
+- **Instrumenting profilers** record every function call. Counts are exact, but the overhead can
+  be large, and it distorts the timing.
 - **Sampling profilers** interrupt the program many times per second (for example 99 times) and
   record the current **call stack**: the running function and the functions that called it. A
   function present in 30% of samples used roughly 30% of the CPU time. The overhead is low, so many
@@ -114,18 +117,19 @@ How to read it:
 > A CPU profile only shows time spent **on the CPU**. A request waiting 800 ms for the database or a
 > lock uses almost no CPU, so it is nearly invisible in a CPU flame graph. For waiting, use traces,
 > **wall-clock** profiling (async-profiler's `wall` mode, py-spy's `--idle` option), Go's block and
-> mutex profiles, or Gregg's *off-CPU* flame graphs.
+> mutex profiles (both are off by default: enable them with `runtime.SetBlockProfileRate` and
+> `runtime.SetMutexProfileFraction`), or Gregg's *off-CPU* flame graphs.
 
 ## Profilers by ecosystem
 
 | Ecosystem | CPU | Memory | Notes |
 |---|---|---|---|
 | Linux, native code | `perf` + FlameGraph scripts | `heaptrack` | Needs symbols; JIT runtimes need extra setup |
-| Go | `net/http/pprof`, `go tool pprof` | heap profile | Also goroutine, block, mutex profiles |
-| JVM | async-profiler, JDK Flight Recorder | async-profiler `alloc` mode, heap dumps | async-profiler avoids safepoint bias |
+| Go | `net/http/pprof`, `go tool pprof` | heap profile | Also goroutine, block, mutex profiles (block and mutex are off by default) |
+| JVM | async-profiler, JDK Flight Recorder | async-profiler `alloc` mode, heap dumps | async-profiler avoids *safepoint bias*, a distortion found in many older JVM profilers |
 | Python | py-spy | `tracemalloc`, memray | py-spy attaches to a running process |
 | Rust | `cargo flamegraph` | `heaptrack` | Keep debug symbols in release builds |
-| Node.js | `--cpu-prof`, Chrome DevTools, Clinic.js | heap snapshots | |
+| Node.js | `--cpu-prof`, Chrome DevTools | heap snapshots | |
 
 Some starting commands:
 
@@ -134,11 +138,11 @@ Some starting commands:
 perf record -F 99 -g -p <pid> -- sleep 30
 perf script | ./stackcollapse-perf.pl | ./flamegraph.pl > cpu.svg
 
-py-spy record -o cpu.svg --pid <pid>   # Python: no code change, no restart
-py-spy dump --pid <pid>                # what is every thread doing right now?
-asprof -d 30 -f cpu.html <pid>         # JVM, async-profiler 3.x
-cargo flamegraph --bin my-server       # Rust
-node --cpu-prof server.js              # Node.js: .cpuprofile on exit, open in DevTools
+py-spy record -d 30 -o cpu.svg --pid <pid>  # Python: no code change, no restart
+py-spy dump --pid <pid>                      # what is every thread doing right now?
+asprof -d 30 -f cpu.html <pid>               # JVM, async-profiler 3.0 or later
+cargo flamegraph --bin my-server             # Rust: builds, runs and profiles the binary
+node --cpu-prof server.js                    # Node.js: .cpuprofile on normal exit, open in DevTools
 ```
 
 In Go, the profiler is in the standard library. Serve it on a **separate, internal-only** port:
@@ -151,16 +155,21 @@ import (
 
 func main() {
     go http.ListenAndServe("localhost:6060", nil) // never expose to the internet
-    // ... start the real server on another port
+    // ... start the real server on another port, with its own http.NewServeMux()
 }
 ```
 
 Then run `go tool pprof -http=:8081 'http://localhost:6060/debug/pprof/profile?seconds=30'` and
-open the flame graph view.
+choose the flame graph in the *View* menu.
+
+The `net/http/pprof` import registers its handlers on Go's default router (`http.DefaultServeMux`).
+So the real server must use its own router. If it also uses the default one, the profiler is
+public too.
 
 > [!NOTE]
-> Profilers in containers often need extra permissions (for py-spy in Docker, the `SYS_PTRACE`
-> capability). Sort this out before an incident.
+> Profilers in containers often need extra permissions. For example, py-spy in Docker needs the
+> `SYS_PTRACE` capability, and attaching to a running process usually needs root. Sort this out
+> before an incident.
 
 ## Memory: allocation pressure and leaks
 
@@ -175,10 +184,13 @@ GC cannot free them. Memory grows until the process is killed. To hunt one:
 1. **Confirm the pattern.** A sawtooth returning to the same baseline is normal; a baseline that
    keeps rising is a leak. Watch heap metrics, not only process size (RSS): many runtimes keep freed
    memory instead of returning it to the operating system.
-2. **Take two heap snapshots** some time apart, under load, and **compare** them. Go:
-   `go tool pprof -base heap1.pb.gz heap2.pb.gz`. Python: `tracemalloc` snapshots and
-   `compare_to()`. JVM: `jcmd <pid> GC.heap_dump heap.hprof`, opened in Eclipse MAT. Node.js:
-   heap snapshots in Chrome DevTools.
+2. **Take two heap snapshots** some time apart, under load, and **compare** them. Go: download
+   `/debug/pprof/heap` twice (for example with `curl -o heap1.pb.gz`), then run
+   `go tool pprof -base heap1.pb.gz heap2.pb.gz` to see only the growth. Python: start
+   `tracemalloc` early, take two snapshots and use `compare_to()`. JVM:
+   `jcmd <pid> GC.heap_dump /tmp/heap.hprof` (the JVM process writes the file itself, so use an
+   absolute path), opened in Eclipse MAT. Node.js: heap snapshots (for example with
+   `node --heapsnapshot-signal=SIGUSR2`), compared in Chrome DevTools.
 3. **Ask what keeps the growing objects alive.** Heap tools show the chain of references
    ("retainers") that holds each object.
 
@@ -187,14 +199,16 @@ goroutines or threads blocked forever, and global lists that only grow.
 
 > [!WARNING]
 > A heap dump contains everything in memory: passwords, tokens, personal data. Treat it like a
-> database backup. Taking one can pause the process, so first remove the instance from the load
-> balancer.
+> database backup. Taking one can pause the process for a long time on a big heap (a JVM heap
+> dump first runs a full garbage collection by default), and the file can be as big as the heap.
+> So first remove the instance from the load balancer, and check the free disk space.
 
 ## The database side
 
 When the trace points at the database, ask it which queries cost the most. In PostgreSQL, enable
-the `pg_stat_statements` extension (it must be in `shared_preload_libraries`, which needs a
-restart) and sort by **total** time:
+the `pg_stat_statements` extension: add it to `shared_preload_libraries` (this needs a server
+restart), then run `CREATE EXTENSION pg_stat_statements;` in your database. Sort by **total**
+time:
 
 ```sql
 SELECT calls,
@@ -206,19 +220,32 @@ ORDER BY total_exec_time DESC
 LIMIT 10;
 ```
 
-A 2 ms query called 50,000 times per minute costs far more than a 2-second report run once an hour.
-(These column names are from PostgreSQL 13 and later.) PostgreSQL can also log statements slower
+A 2 ms query called 50,000 times per minute (100 seconds of database time every minute) costs far
+more than a 2-second report run once an hour. (These column names are from PostgreSQL 13 and
+later; older versions call them `total_time` and `mean_time`.) PostgreSQL can also log statements slower
 than a threshold (`log_min_duration_statement`), and `auto_explain` logs their plans.
 
 In MySQL, turn on the **slow query log** (`slow_query_log = ON`) and lower `long_query_time`
 (in seconds; the default is 10). Summarise the log with `mysqldumpslow` or Percona's
 `pt-query-digest`.
 
-Then run `EXPLAIN ANALYZE` on realistic data. If the query reads far more rows than it returns, an
-index is usually missing or unusable; see
+Then run `EXPLAIN ANALYZE` on realistic data. Be careful: it really runs the query, so for an
+`INSERT`, `UPDATE` or `DELETE`, run it between `BEGIN` and `ROLLBACK`. If the query reads far more
+rows than it returns, an index is often missing or unusable; see
 [database indexes and reading EXPLAIN](/posts/database-indexes-and-explain). If a query is fast
-alone but slow in production, check **lock waits**: in PostgreSQL, the `wait_event_type` column of
-`pg_stat_activity` shows what each session is waiting for.
+alone but slow in production, check **lock waits**. In PostgreSQL, the `wait_event_type` and
+`wait_event` columns of `pg_stat_activity` show what each session is waiting for (`Lock` means a
+lock), and `pg_blocking_pids()` lists the sessions that block it:
+
+```sql
+SELECT pid,
+       wait_event_type,
+       wait_event,
+       pg_blocking_pids(pid) AS blocked_by,
+       left(query, 60)       AS query
+FROM pg_stat_activity
+WHERE wait_event_type = 'Lock';
+```
 
 ## Load testing without fooling yourself
 
@@ -241,18 +268,21 @@ limits before users do. Realism matters more than the tool:
 ### Coordinated omission
 
 Many load tools are **closed-loop**: each connection sends a request, waits for the response, then
-sends the next. This hides the worst latency. Gil Tene named the problem **coordinated omission**:
-the tool slows down together with the server and *omits* the requests it never sent.
+sends the next. This hides the worst latency. Gil Tene popularised the name for this problem,
+**coordinated omission**: the tool slows down together with the server and *omits* the requests it
+never sent.
 
 An example. A test runs for 60 seconds on one connection. The server answers in 1 ms but freezes
 once for 5 seconds. The tool records tens of thousands of 1 ms results and **one** 5-second result,
 so it reports a p99 of about 1 ms. Real users do not wait politely. If 500 users per second keep
-arriving, about 2,500 of them arrive during the freeze and wait up to 5 seconds. That is more than
-1% of all requests, so the true p99 is several seconds.
+arriving, about 2,500 of them (500 × 5) arrive during the freeze and wait up to about 5 seconds.
+That is about 8% of the 30,000 requests in the test (500 × 60), far more than 1%, so the true p99
+is several seconds. (These numbers are a made-up illustration, not a measurement.)
 
-The fix is an **open model**: send requests at a fixed rate whether or not earlier ones finished,
-and measure from when each request *should* have been sent. wrk2 and vegeta do this. In k6, use an
-arrival-rate executor:
+The fix is an **open model**: send requests at a fixed rate whether or not earlier ones finished.
+wrk2, vegeta and k6's arrival-rate executors work this way. wrk2 also measures each latency from
+when the request *should* have been sent, not from when it was really sent. In k6, it looks like
+this:
 
 ```js
 import http from 'k6/http';
@@ -277,6 +307,9 @@ export default function () {
 }
 ```
 
+If k6 runs out of virtual users (`maxVUs`), it cannot keep the rate. It then skips iterations and
+counts them in the `dropped_iterations` metric, so watch that number too.
+
 Raise the rate step by step. Latency stays flat, then rises sharply as a resource saturates. That
 "knee" is your real capacity.
 
@@ -287,16 +320,17 @@ profiler on production servers all the time and stores the profiles, like metric
 flame graph for "the API servers yesterday at 14:00", **compare** before and after a deploy, and
 find the most expensive functions across the fleet.
 
-Open-source options include **Pyroscope** (now part of Grafana Labs) and **Parca**, which uses eBPF
-to profile processes without code changes. Google described the idea at large scale in its paper
-*Google-Wide Profiling*.
+Open-source options include **Grafana Pyroscope** and **Parca**, whose agent uses eBPF (a Linux kernel feature for running small, safe programs inside
+the kernel) to profile processes without code changes. Google described the idea at large scale
+in the paper *Google-Wide Profiling: A Continuous Profiling Infrastructure for Data Centers*
+(IEEE Micro, 2010).
 
 ## The usual culprits
 
 | Culprit | What you see | Typical fix |
 |---|---|---|
 | N+1 queries | Many identical small DB spans per request | Eager loading or batching ([ORMs and N+1](/posts/orm-n-plus-one)) |
-| Missing index | High total time in `pg_stat_statements`; sequential scan in `EXPLAIN` | An index for the whole query |
+| Missing index | High total time in `pg_stat_statements`; sequential scan of a big table in `EXPLAIN` | An index that matches the query's filter and sort |
 | Lock contention | Low CPU, high latency, threads waiting | Shorter critical sections, less shared state |
 | GC pressure | Wide GC boxes in the flame graph; latency spikes | Allocate less, then tune heap size |
 | Chatty network calls | Long chains of sequential calls to other services | Batch, call in parallel, cache |
@@ -307,7 +341,7 @@ Many of these are about **waiting**, not computing. That is why traces come befo
 
 ## Trade-offs: when to stop
 
-- **Good enough is a number.** When the endpoint meets its target (its SLO), stop. More tuning
+- **Good enough is a number.** When the endpoint meets its target (its SLO, or service level objective), stop. More tuning
   usually makes code harder to read for little gain.
 - **Sometimes the fix is design, not code.** If a page needs 40 calls to other services, no
   micro-optimisation will save it.
@@ -327,4 +361,5 @@ Many of these are about **waiting**, not computing. That is why traces come befo
 - Brendan Gregg: *Systems Performance: Enterprise and the Cloud* (book)
 - Go documentation: [Diagnostics](https://go.dev/doc/diagnostics) and [net/http/pprof](https://pkg.go.dev/net/http/pprof)
 - PostgreSQL documentation: [pg_stat_statements](https://www.postgresql.org/docs/current/pgstatstatements.html)
+- Profiler projects: [async-profiler](https://github.com/async-profiler/async-profiler) and [py-spy](https://github.com/benfred/py-spy)
 - Gil Tene: [wrk2](https://github.com/giltene/wrk2), whose README explains coordinated omission, and his talk *How NOT to Measure Latency*

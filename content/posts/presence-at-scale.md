@@ -38,8 +38,8 @@ Open means online; close means offline. Fast and almost free. But connections of
 a phone that loses signal sends no "goodbye" packet. And if a gateway crashes, nobody sends "closed"
 events at all, so its users stay online forever: **ghost users**.
 
-**Heartbeat-based presence.** The client (or the gateway, on its behalf) says "still here" every few
-seconds, and the server stores "online until now + TTL". A **TTL** (time to live) is how long a value
+**Heartbeat-based presence.** The client (or the gateway, on its behalf) says "still here" at a fixed
+interval, for example every 30 seconds, and the server stores "online until now + TTL". A **TTL** (time to live) is how long a value
 stays valid before it expires automatically. If heartbeats stop for any reason, the value expires and
 the user becomes offline: the system heals itself. It even works with plain HTTP polling (see
 [polling, SSE and WebSockets](/posts/realtime-polling-sse-websockets)).
@@ -81,10 +81,11 @@ anyone go offline. And keep heartbeats **out of your main SQL database**: store 
 written once when the user goes offline.
 
 > [!WARNING]
-> An expiring key is **silent**: nobody is told that user 42 went offline. Redis keyspace
-> notifications for expired keys are fire-and-forget (lost if your listener is disconnected) and are
-> sent when Redis actually deletes the key, which can be later than the moment the TTL ran out. To
-> announce "went offline" reliably, keep a sorted set of `user id -> last heartbeat` and run a
+> An expiring key is **silent**: nobody is told that user 42 went offline. Redis can send keyspace
+> notifications for expired keys, but they are off by default, they are fire-and-forget (lost if your
+> listener is disconnected), and Redis sends them only when it actually finds and deletes the expired
+> key, which can be later than the moment the TTL ran out. To announce "went offline" reliably, keep
+> a sorted set of `user id -> last heartbeat` (split into several sets at larger scale) and run a
 > **sweeper** every few seconds that publishes offline events for users whose heartbeat is too old.
 
 ### At larger scale: one lease per gateway
@@ -100,7 +101,8 @@ design moves the heartbeat up one level:
  If gateway 3's lease expires, the presence service drops ALL of gateway 3's connections at once.
 ```
 
-Gateways find dead clients with WebSocket ping and pong frames. Each gateway also refreshes a
+Gateways find dead clients with WebSocket ping and pong frames: the gateway sends a ping, and the
+client must answer with a pong (browsers do this automatically). Each gateway also refreshes a
 **lease** (a record with a short TTL); if it crashes, the lease expires and all its users are cleaned
 up together. One heartbeat per **gateway**, not per user.
 
@@ -217,7 +219,7 @@ def flush():     # called every 2 seconds
         last_sent.update(batch)
 ```
 
-**Typing indicators** need an even lighter path: never store them. The client sends "typing" at most
+**Typing indicators** need an even lighter path: never store them, only forward them. The client sends "typing" at most
 every few seconds; receivers hide it after about 5 seconds without a new event, so a lost "stopped
 typing" fixes itself. In large rooms, show "several people are typing" or turn it off.
 
@@ -232,7 +234,7 @@ gateways watching them. Combining devices is local, with no locks across servers
 is split into one request per shard.
 
 Presence can also be **rebuilt**. When a shard restarts empty, or you add shards, ask the gateways to
-report their connections again; within one lease interval the state is back, with no data migration.
+report their connections again; once they have all answered, the state is back, with no data migration.
 One trap: a freshly started shard knows nobody, so everyone looks offline. Give it a warm-up period
 during which it publishes no "offline" events.
 
@@ -263,8 +265,9 @@ framework Phoenix replicates presence between servers with a CRDT (a data struct
 updates without coordination) instead of a central database.
 
 The flip side: never let correctness depend on presence. "Store the message only if the recipient is
-online" is a bug. "Skip the push notification if the recipient seems online" is fine: either outcome
-is harmless.
+online" is a bug. "Skip the push notification if the recipient seems online" is acceptable: if
+presence is wrong, the worst case is one missing or one extra notification, and the message itself is
+still stored and shown when the recipient opens the app.
 
 **When you don't need all this:** with a few thousand users online, one Redis with TTL keys is
 enough. If the product only needs "active in the last 15 minutes", skip real-time presence and update
@@ -276,7 +279,7 @@ Starting values to tune with your own measurements — not standards:
 
 | Setting | Starting point | Why |
 |---|---|---|
-| Client ping interval | 30 s | Finds dead connections; shorter than typical proxy idle timeouts |
+| WebSocket ping interval | 30 s | Finds dead connections; shorter than common proxy idle timeouts (often 60 s by default) |
 | Presence TTL or lease | 2–3 × the refresh interval | One lost heartbeat must not mean offline |
 | Offline grace period | 15–30 s | Covers short network drops and reconnects |
 | Away after | 5–10 min without input | A product decision |
@@ -297,5 +300,5 @@ Starting values to tune with your own measurements — not standards:
 - Phoenix documentation: [Phoenix.Presence](https://hexdocs.pm/phoenix/Phoenix.Presence.html) — presence with many connections per user, replicated without a central store
 - Redis documentation: [EXPIRE](https://redis.io/docs/latest/commands/expire/) — how TTLs and key expiry work
 - Redis documentation: [Sorted sets](https://redis.io/docs/latest/develop/data-types/sorted-sets/)
-- RFC 6121: [XMPP Instant Messaging and Presence](https://www.rfc-editor.org/rfc/rfc6121) — a standard presence protocol with approved subscriptions
+- RFC 6121: [XMPP Instant Messaging and Presence](https://www.rfc-editor.org/rfc/rfc6121) — a standard presence protocol in which users approve who may see their presence
 - RFC 6455: [The WebSocket Protocol](https://www.rfc-editor.org/rfc/rfc6455) — includes the ping and pong frames

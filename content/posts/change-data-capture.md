@@ -306,7 +306,7 @@ the old values, for example the tenant ID to find the right cache key, set
 Watch out for tables **without a primary key**. Once such a table is in a publication that
 publishes updates and deletes, PostgreSQL rejects `UPDATE` and `DELETE` on it with an error. Give
 it a primary key, or set `REPLICA IDENTITY FULL` (or `USING INDEX` with a unique index that is
-not partial and covers only `NOT NULL` columns).
+not partial, not deferrable, and covers only `NOT NULL` columns).
 
 After the delete event, Debezium also sends a **tombstone**: a message with the same key and a
 `null` value. Kafka **log compaction** (keeping only the latest message per key) uses tombstones to
