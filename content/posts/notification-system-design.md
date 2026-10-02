@@ -99,19 +99,22 @@ tiny, but each message costs money.
 | Web push | FCM, or the standard Web Push protocol | Push subscription | User must allow it in the browser |
 | Email | Amazon SES, SendGrid, Postmark, Mailgun... | Email address | Arrival depends on sender reputation |
 | SMS | Twilio, Vonage, Amazon SNS... | Phone number | Paid per message; rules differ by country |
-| In-app | Your database + SSE or WebSocket | User id | The only channel you fully control |
+| In-app | Your database + SSE (Server-Sent Events) or WebSocket | User id | The only channel you fully control |
 
 Two details that surprise people. One SMS holds 160 characters of the basic GSM-7 alphabet, but one
-character outside it (an emoji, some accented letters) switches the message to UCS-2, which holds 70;
-longer texts are split into several paid parts. And Gmail and Yahoo require bulk email
-senders to authenticate their mail (SPF, DKIM, DMARC) and to support one-click unsubscribe (RFC 8058).
+character outside it (an emoji, some accented letters) switches the message to UCS-2, which holds 70.
+Longer texts are split into several paid parts, and each part holds a little less (153 or 67
+characters), because a small header in each part tells the phone how to join them. And since 2024,
+Gmail and Yahoo require bulk email senders to authenticate their mail with SPF, DKIM and DMARC (DNS
+records and signatures that prove a message really comes from your domain), to keep spam complaints
+low, and to support one-click unsubscribe (RFC 8058) in marketing mail.
 
 ### Preferences and templates
 
 Store preferences as rows `(user_id, category, channel, enabled)`, with a few **categories** people
 understand ("comments", "orders", "news and offers"). Security messages such as login codes ignore
-preferences. A marketing opt-out always wins; many countries require consent and an easy unsubscribe
-for marketing.
+preferences. A marketing opt-out always wins; in many countries the law requires consent, or at
+least an easy unsubscribe, for marketing messages.
 
 Key templates by `(type, channel, locale, version)`. Escape every user-provided value (a display name
 can contain HTML). If a variable is missing, **fail** instead of sending "Hi {{name}}" to a million
@@ -145,6 +148,7 @@ CREATE TABLE deliveries (
     status          TEXT        NOT NULL, -- 'scheduled' | 'sending' | 'sent' | 'failed' ...
     send_after      TIMESTAMPTZ NOT NULL, -- quiet hours and batching move this
     expires_at      TIMESTAMPTZ,          -- after this, sending is pointless
+    claimed_at      TIMESTAMPTZ,          -- when a worker moved it to 'sending'
     PRIMARY KEY (notification_id, channel)
 );
 ```
@@ -152,11 +156,12 @@ CREATE TABLE deliveries (
 - The **dedupe key** comes from the business event. Insert with `ON CONFLICT DO NOTHING`, and a
   repeated event does nothing.
 - Workers **claim** a delivery by moving it from `scheduled` to `sending` in one conditional
-  `UPDATE`. Only one worker wins.
-- The ambiguous send cannot be fully fixed, because most push, email and SMS APIs do not accept an
-  idempotency key. Keep the window small (record results immediately) and the damage small: set a
-  collapse identifier (`apns-collapse-id` on APNs, the `tag` field for Android notifications in FCM)
-  so a second copy replaces the first on screen.
+  `UPDATE`. Only one worker wins. The same `UPDATE` sets `claimed_at`, so a delivery left in
+  `sending` by a crashed worker can be picked up again after a timeout.
+- The ambiguous send cannot be fully fixed, because many push, email and SMS APIs do not accept an
+  idempotency key (check yours; some do). Keep the window small (record results immediately) and the
+  damage small: set a collapse identifier (`apns-collapse-id` on APNs, the `tag` field for Android
+  notifications in FCM) so a second copy replaces the first on screen.
 
 After an ambiguous timeout, decide per type. Retry a login code (*at-least-once*): a duplicate is a
 small annoyance, a missing code locks the user out. Don't retry a marketing push (*at-most-once*): a
@@ -167,23 +172,29 @@ duplicate looks like spam, a missing one costs little.
 - **Per-user caps**, such as "at most 3 marketing pushes per day" (a counter in Redis; see
   [rate limiting](/posts/rate-limiting)). Transactional messages are exempt.
 - **Provider limits.** Amazon SES, for example, gives each account a maximum sending rate, and APNs
-  returns `429` for too many notifications to one device token. Use a token bucket per provider.
+  returns `429` for too many notifications to one device token. Use a token bucket (a rate limiter
+  that allows short bursts) per provider.
 - **Your own capacity.** A push to 10 million users makes many of them open the app within minutes.
   Spread big campaigns over time.
 
 **Batching** turns 14 pushes into "Ana, Ben and 12 others liked your photo". The first like creates a
-notification keyed `likes:photo_555` with `send_after = now() + 10 minutes`. While it is still
-`scheduled`, new likes update it (add a name, increase the count). Batching adds delay, so never batch
-transactional messages. **Digests** are daily or weekly emails built from unread inbox items; skip
-what the user has already read.
+notification for `photo_555` with `send_after = now() + 10 minutes`. Each new like looks for a
+notification for the same photo that is still `scheduled`: if there is one, it updates it (add a
+name, increase the count); if not, it starts a new batch. So give each batch its own dedupe key (for
+example `likes:photo_555:` plus the id of its first like). A fixed key like `likes:photo_555` would
+block every batch after the first. Batching adds delay, so never batch transactional messages.
+**Digests** are daily or weekly emails built from unread inbox items; skip what the user has
+already read.
 
 ## Quiet hours and time zones
 
-- Store the user's **IANA time zone name** (`Europe/Berlin`), not an offset like `+01:00`. Offsets
-  change with daylight saving time; names don't.
+- Store the user's **IANA time zone name** (a name from the standard time zone database, such as
+  `Europe/Berlin`), not an offset like `+01:00`. Offsets change with daylight saving time; names
+  don't.
 - During quiet hours, move `send_after` of non-urgent deliveries to the end of the quiet period. Login
   codes and "your driver is here" ignore quiet hours.
-- Time zones range from UTC−12 to UTC+14, so a "9:00 local time" campaign runs for more than a day.
+- Time zones range from UTC−12 to UTC+14 (26 hours apart), so a "9:00 local time" campaign runs for
+  more than a day.
 - A scheduler picks due rows with `FOR UPDATE SKIP LOCKED`, as in
   [background jobs](/posts/background-jobs-and-cron).
 
@@ -207,18 +218,21 @@ def next_allowed_send(now_utc, tz_name, quiet_start=time(22), quiet_end=time(8))
 |---|---|---|
 | Success | APNs `200`; a message id from an email or SMS API | Mark `sent` |
 | Permanent failure | APNs `410 Unregistered`, `400 BadDeviceToken`; FCM `UNREGISTERED`; invalid number | Don't retry; fix the data |
-| Transient failure | Timeouts, `5xx`, `429` | Retry with backoff and jitter; respect `Retry-After` |
+| Transient failure | Timeouts, `5xx`, `429` | Retry later with backoff and jitter; respect `Retry-After` if the provider sends it |
 | Too late | `expires_at` has passed | Drop it, record `expired` |
 
 A late notification can be worse than none ("your driver is arriving", 40 minutes later). Give each
-type a time to live and pass it to the provider (APNs `apns-expiration` header, FCM `ttl`). After the
-last attempt, move the delivery to a dead-letter queue and alert.
+type a time to live and pass it to the provider (APNs `apns-expiration` header, `ttl` in FCM's
+Android settings). Apple describes this as best effort, so a message can still arrive after that time.
+After the last attempt, move the delivery to a dead-letter queue (a queue for messages that failed
+for good, kept for inspection) and alert.
 
 **Failover** works for email and SMS: integrate a second provider and switch when a
 [circuit breaker](/posts/resilience-patterns) sees the first one failing. Send a small share of real
 traffic through the backup all the time, so you know it still works. Push has **no failover**: APNs
-is the only way to reach an iOS app. If it is down, queue, wait and respect expiry. Falling back to
-another *channel* ("send the login code by SMS") is a product decision.
+is the only way to reach an iOS app (FCM and other push services also deliver to iOS through APNs).
+If it is down, queue, wait and respect expiry. Falling back to another *channel* ("send the login
+code by SMS") is a product decision.
 
 ## Device token lifecycle
 
@@ -228,11 +242,12 @@ Keep `device_tokens (token, user_id, platform, environment, last_seen_at)`.
   `last_seen_at = now()`.
 - **Detach on logout.** Otherwise the next person who logs in on that shared tablet gets the previous
   user's messages.
-- **Remove dead tokens**: APNs `410` (`Unregistered`), `400 BadDeviceToken`, FCM `UNREGISTERED`.
-  Apple's documentation says not to retry these. `BadDeviceToken` also appears when a development token
-  is sent to the production APNs server, so store the environment.
+- **Remove dead tokens**: APNs `410` (`Unregistered`, `ExpiredToken`), `400 BadDeviceToken`, FCM
+  `UNREGISTERED`. Apple's documentation says not to retry these. `BadDeviceToken` also appears when
+  the token does not match the server's environment (for example, a development token sent to the
+  production APNs server). So store the environment, and check it before you delete a token.
 - **Expire stale tokens.** Firebase's token management guide recommends storing a timestamp with each
-  token and removing stale ones.
+  token and removing tokens that have not been refreshed for a long time.
 
 ## Delivery and open tracking
 
@@ -243,7 +258,8 @@ Keep `device_tokens (token, user_id, platform, environment, last_seen_at)`.
 - **Email:** providers post events (delivered, bounced, complained, opened, clicked) to your
   [webhook](/posts/webhooks-reliable-delivery). Hard bounces and spam complaints must add the address
   to a **suppression list**. Opens (measured with a tiny image) are unreliable: Apple's Mail Privacy
-  Protection loads images in the background, so "opens" appear that never happened. Trust clicks more.
+  Protection loads remote images in the background, even for messages the user never opens, so
+  "opens" appear that never happened. Trust clicks more.
 - **SMS:** providers can report delivery receipts to a webhook; their quality varies by country.
 
 Also count **opt-outs** per type. A type with many opt-outs is a product problem.
@@ -275,7 +291,9 @@ client fetches what it missed. If the user is active in the app right now
 
 Services and workers are stateless, so you add instances. The inbox grows fastest: partition it by
 time, drop old partitions, and [shard by user id](/posts/sharding-and-partitioning) when one database
-is not enough.
+is not enough. One catch: in PostgreSQL, a unique constraint on a partitioned table must include the
+partition column. So you cannot keep `UNIQUE (user_id, dedupe_key)` on a table partitioned by
+time. Keep the dedupe keys in a separate, smaller table instead, and delete old keys after a few days.
 
 | Failure | What users see | Defence |
 |---|---|---|

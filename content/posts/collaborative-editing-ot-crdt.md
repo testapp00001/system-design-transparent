@@ -29,7 +29,7 @@ The familiar approaches break at least one of these:
 | Last-write-wins (save the whole document, newest save wins) | Bob's save does not contain Alice's fix, so her fix is silently lost. |
 | Locking (one editor at a time, or per paragraph) | No conflicts, but no real collaboration. Forgotten locks need timeouts. |
 | Optimistic concurrency (version number, reject stale writes) | Fine for forms. For typing, almost every keystroke is "stale". |
-| Three-way merge, like `git merge` | Conflicts need a human, many times per second. |
+| Three-way merge, like `git merge` | Edits close together conflict and need a human to resolve them. That cannot work many times per second. |
 
 Last-write-wins is fine when the unit of data is small: Figma has described resolving each *property*
 of an object (such as a shape's colour) with last-writer-wins on its server. But text is one long
@@ -51,7 +51,7 @@ Alice applies Bob's op as is:   insert(11, "!")  on "Hello, world"  ->  "Hello, 
 
 The copies have diverged. A position number only has meaning for one version of the document. Alice's
 comma moved every later character one place right, so position 11 no longer points where Bob meant.
-OT fixes this by **changing the numbers**. CRDTs fix it by **not using numbers**.
+OT fixes this by **changing the position numbers**. CRDTs fix it by **not using position numbers**.
 
 ## Operational transformation: rewrite the operation
 
@@ -67,9 +67,9 @@ found cases where several of them let copies diverge.
 
 ### The central server approach
 
-The **Jupiter** system from Xerox PARC (1995) made OT practical with a simpler design. Clients talk
-only to a server. The server puts all operations into one order and numbers each new version of the
-document: a **revision**. Every problem is now a conversation between just two parties. Google Wave's
+The **Jupiter** system from Xerox PARC (1995) used a simpler design. Clients talk only to a server.
+The server puts all operations into one order and numbers each new version of the document: a
+**revision**. Every problem is now a conversation between just two parties. Google Wave's
 published OT design built on the Jupiter approach, and Google has described Google Docs as using
 operational transformation.
 
@@ -87,12 +87,14 @@ operational transformation.
 ```
 
 Clients transform too: Bob's own insert is not yet acknowledged when revision 8 arrives, so he
-transforms the incoming operation against it first. A common simplification: each client has at most
-one batch of operations awaiting acknowledgement and buffers new keystrokes meanwhile.
+transforms the incoming operation against it first. A common simplification, which Google Wave's
+design also used: each client has at most one batch of operations awaiting acknowledgement and buffers
+new keystrokes meanwhile.
 
-The trade-off: overhead is low, and the server can reject a forbidden operation before anyone sees
-it. But each document needs exactly one ordering point, so all its clients must reach the same server
-process, and a client returning after a day offline must transform against everything since.
+The trade-off: overhead is low, and the server can reject a forbidden operation before other users
+see it (the sender then rolls back its unconfirmed change). But each document needs exactly one
+ordering point. Usually that is one server process; it can also be a database that accepts revision
+N only once. A client returning after a day offline must transform against everything since.
 
 Libraries in this family include ShareDB (Node.js). The ProseMirror and CodeMirror editors ship
 collaboration modules with a similar central-authority design.
@@ -101,8 +103,8 @@ collaboration modules with a similar central-authority design.
 
 A **CRDT** (conflict-free replicated data type) is a data structure designed so that replicas can be
 changed independently and merged later, in any order, and always end up identical. No server is needed
-to choose an order. The standard formal description is by Shapiro, Preguiça, Baquero and Zawirski
-(2011).
+to choose an order. The widely cited formal description is by Shapiro, Preguiça, Baquero and
+Zawirski (2011).
 
 ### State-based vs operation-based
 
@@ -140,7 +142,7 @@ merged  char:  H    e    l    l    o    ,    _    w    o    r    l    d    !
 Each replica finds `s5` or `s11` wherever it is now. No number changes, and arrival order does not
 matter. If both users insert after the *same* character, a deterministic rule (such as comparing ids)
 orders them identically everywhere. Real algorithms such as RGA and YATA (Yjs uses a modified YATA)
-add more rules and much more compact storage, but the core idea is the same.
+add more rules, and real libraries store the ids much more compactly, but the core idea is the same.
 
 ### Yjs and Automerge
 
@@ -174,23 +176,24 @@ bob.getText('body').toString()    // "Hello, world!"
 ```
 
 In a real app you listen to `doc.on('update', ...)` and send each update to the server. The state
-vector maps each client id to the highest counter seen from it, a close relative of the vector clocks
-in [time and ordering](/posts/ids-clocks-and-ordering).
+vector records, for each client id, how far that client's counter has been seen. It is a close
+relative of the vector clocks in [time and ordering](/posts/ids-clocks-and-ordering).
 
 ## The price: metadata and tombstones
 
 A CRDT document carries more than the visible text: ids, neighbour references and tombstones.
-Libraries reduce this a lot. Yjs merges a run of characters typed by one user into a single item, and
-for deleted text it keeps only a small record of the range, not the content (unless you turn garbage
-collection off, for example to keep old versions). Automerge stores its full history in a compressed
-binary format.
+Libraries reduce this a lot. Yjs merges a run of characters typed one after another by one user into
+a single item, and for deleted text it keeps only a small record of the range, not the content
+(unless you turn garbage collection off, for example to keep old versions). Automerge stores its
+full history in a compressed binary format.
 
 Why not remove tombstones completely? A laptop that was offline for a month may still send "insert
 after character X". Removing X safely requires knowing that *every* replica has seen the deletion,
 which you usually cannot know.
 
-OT carries less weight: the server keeps a window of recent operations, and a client that falls too
-far behind reloads. Either way, measure real documents after weeks of real use, not on day one.
+OT carries less weight: to sync clients, the server needs only a window of recent operations, and a
+client that falls too far behind reloads. Either way, measure real documents after weeks of real
+use, not on day one.
 
 ## Offline-first editing
 
@@ -199,8 +202,8 @@ locally (for example with `y-indexeddb`) and exchanges the missing ones on recon
 this style **local-first software**. Two cautions:
 
 - **Converged is not the same as meaningful.** If two people rewrite the same paragraph offline, the
-  result usually contains both versions. Everyone sees the *same* result, not a *good* one. Keep
-  version history and show users what changed.
+  result usually contains text from both versions. Everyone sees the *same* result, not a *good*
+  one. Keep version history and show users what changed.
 - **Business rules are not checked.** Rules such as "usernames are unique" or "stock never goes below
   zero" need a single place that decides (see
   [CAP and consistency models](/posts/cap-theorem-and-consistency-models)).
@@ -218,11 +221,13 @@ It behaves very differently from the document:
 
 Keep them separate: cursors stored in the document would add permanent history on every move. Yjs has
 a separate awareness protocol (in `y-protocols`): each client broadcasts a small JSON state, and others
-drop it when the client disconnects or has not renewed it for 30 seconds.
+drop it when the client leaves or has not renewed it for 30 seconds (the timeout in current
+`y-protocols` versions).
 
 A cursor still points *into* the document, and positions shift when others type. Store it as a
-reference to a character id, not an integer; Yjs calls these **relative positions**. Throttle cursor
-broadcasts to a few per second. For large audiences, see [presence at scale](/posts/presence-at-scale).
+reference to a character id, not an integer; Yjs calls these **relative positions**. As a rule of
+thumb, throttle cursor broadcasts to a few per second. For large audiences, see
+[presence at scale](/posts/presence-at-scale).
 
 ## What the server still does
 
@@ -232,9 +237,9 @@ product has one, usually reached over WebSockets (see
 
 - **Relay.** Send each update to the other clients of the document. Route all connections for one
   document to one server process (for example, by consistent hashing of the document id), like the
-  room servers in [scaling WebSockets](/posts/scaling-websockets-chat). OT requires this; CRDTs allow
-  spreading a document over servers joined by [pub/sub](/posts/pub-sub-redis-nats), but one room per
-  process is simpler.
+  room servers in [scaling WebSockets](/posts/scaling-websockets-chat). OT needs one ordering point
+  per document, and one process is the simplest way to get it. CRDTs also allow spreading a document
+  over servers joined by [pub/sub](/posts/pub-sub-redis-nats), but one room per process is simpler.
 - **Persistence.** Append each update to a log and periodically compact it into one snapshot (in Yjs,
   `Y.mergeUpdates` or re-encoding the loaded document). It is a small form of
   [event sourcing](/posts/event-sourcing-and-cqrs).
@@ -244,12 +249,15 @@ product has one, usually reached over WebSockets (see
 
 > [!WARNING]
 > With a CRDT, the client applies its change locally before the server sees it. If the server refuses
-> an update, that client's copy differs from everyone else's until it reloads. So enforce permissions
-> per document on connect, not per edit. If the server must approve every change, that is an argument
-> for a central-authority, OT-style design.
+> an update, that client's copy differs from everyone else's until it reloads. With Yjs, the other
+> clients also cannot apply that client's later updates, because they build on the refused one. So
+> enforce permissions per document on connect, not per edit. If the server must approve every
+> change, that is an argument for a central-authority, OT-style design.
 
-Ready-made servers exist: the `y-websocket` server and Hocuspocus for Yjs, `automerge-repo` for
-Automerge, and ShareDB for OT.
+Ready-made servers and server libraries exist: the `y-websocket` server (now published as
+`@y/websocket-server`) and Hocuspocus for Yjs, a sync server built on `automerge-repo` for Automerge,
+and ShareDB for OT. The simple ones are starting points, not finished products: the Automerge sync
+server describes itself as unsecured, so add your own authentication and authorization.
 
 ## How to choose
 
@@ -287,7 +295,7 @@ Rules of thumb:
 - [crdt.tech](https://crdt.tech/): a collection of CRDT papers, talks and implementations
 - [Yjs documentation](https://docs.yjs.dev/)
 - [Automerge](https://automerge.org/)
-- Ink & Switch: [Local-first software](https://www.inkandswitch.com/local-first/)
+- Ink & Switch: [Local-first software](https://www.inkandswitch.com/essay/local-first/)
 - Figma: [How Figma's multiplayer technology works](https://www.figma.com/blog/how-figmas-multiplayer-technology-works/)
 - Papers and books (search by title): Ellis and Gibbs, *Concurrency Control in Groupware Systems*
   (1989); Nichols et al., *High-Latency, Low-Bandwidth Windowing in the Jupiter Collaboration System*
