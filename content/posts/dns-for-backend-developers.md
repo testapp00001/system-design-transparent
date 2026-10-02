@@ -27,13 +27,15 @@ DNS (the Domain Name System) maps names like `api.example.com` to data, most oft
 
 ## How a lookup works
 
-When your code calls `getaddrinfo("api.example.com")`, up to five parties take part:
+When your code looks up `api.example.com` (for example with the C function `getaddrinfo()`, which
+most languages use underneath), up to five parties take part:
 
 1. The **stub resolver** is a small library in your operating system. It checks `/etc/hosts` and the
-   local cache, then asks the resolver listed in `/etc/resolv.conf`.
+   local cache (if the system has one), then asks the resolver listed in `/etc/resolv.conf`.
 2. The **recursive resolver** does the real work. Your ISP, your cloud provider or a public service
    such as `1.1.1.1` runs it. It checks its cache first; on a miss, it walks the tree from the top.
-3. The **root servers** only know who runs each top-level domain (TLD), such as `.com` or `.org`.
+3. The **root servers** do not know your records. They only point to the servers of each top-level
+   domain (TLD), such as `.com` or `.org`.
 4. The **TLD servers** know who runs each domain under them: "`example.com` is served by
    `ns1.dns-host.example`". This pointer is an NS record, also called a **delegation**.
 5. The **authoritative servers** for `example.com` hold the real records and give the final answer.
@@ -67,12 +69,13 @@ UDP port 53 and fall back to TCP for large answers (see [TCP vs UDP](/posts/tcp-
 | MX | Mail servers, with a priority | `10 mx1.mail-host.example.` | Lower number is tried first. A name, not an IP |
 | TXT | Free text | `"v=spf1 ..."` | Email security, domain ownership checks |
 | NS | Authoritative servers for a zone | `ns1.dns-host.example.` | Must match what the registrar set at the TLD |
-| CAA | Which certificate authorities may issue TLS certificates | `0 issue "letsencrypt.org"` | Authorities check it before issuing |
+| CAA | Which certificate authorities may issue TLS certificates | `0 issue "letsencrypt.org"` | Authorities must check it before issuing. No CAA record means any authority may issue |
 | SRV | Host and port of a service | `10 60 5060 sip1.example.com.` | Names look like `_sip._tcp.example.com`. Used by SIP, `mongodb+srv://`, Kubernetes; not by browsers |
 
 You will also meet **SOA** (zone settings, including the negative-caching time below) and **PTR**
-(IP to name, "reverse DNS", which matters for mail servers). The newer **HTTPS** record (RFC 9460)
-can tell a browser before it connects that a site supports HTTP/3 (see
+(IP to name, "reverse DNS", which matters for mail servers; whoever owns the IP address, often your
+cloud provider, controls it). The newer **HTTPS** record (defined in RFC 9460 with a more general
+type, SVCB) can tell a browser before it connects that a site supports HTTP/3 (see
 [HTTP versions](/posts/http-versions)).
 
 A small zone in the standard zone-file format. Each line is name, TTL, class (`IN`), type and data.
@@ -89,6 +92,10 @@ api          60  IN  CNAME  lb-7.cloud-host.example.
 @          3600  IN  CAA    0 issue "letsencrypt.org"
 ```
 
+A real zone also needs an SOA record at the apex, and it usually has two or more NS records. Managed
+DNS hosts create the SOA and NS records for you. To keep it short, the example leaves out the SOA
+and shows only one NS record.
+
 ### CNAME and the zone apex
 
 A CNAME has a strict rule: **a name with a CNAME can have no other records**. The zone apex must
@@ -98,8 +105,9 @@ cloud load balancers and CDNs usually give you a host name, not a fixed IP. You 
 
 - **ALIAS / ANAME / CNAME flattening.** Many DNS hosts offer a special apex record: the DNS host
   finds the target's addresses itself and answers with plain A and AAAA records. Cloudflare calls
-  this "CNAME flattening"; AWS Route 53 has "alias records" for AWS resources. It is not standard, so
-  each provider behaves differently, and a GeoDNS target sees the DNS host's location, not the user's.
+  this "CNAME flattening"; AWS Route 53 has "alias records", which point only to some AWS resources
+  (and to other records in the same zone). It is not standard, so each provider behaves differently.
+  If the target uses GeoDNS (see below), it may see the DNS host's location instead of the user's.
 - **Redirect the apex.** Point `example.com` at a small, stable server that redirects to
   `www.example.com`, and make `www` a normal CNAME.
 - **Use a static IP** if your load balancer offers one.
@@ -125,11 +133,13 @@ Between your record and the connection there can also be:
 
 - the operating system's cache (for example `systemd-resolved` on Linux);
 - the browser's cache, and maybe a different resolver if the browser uses DNS over HTTPS;
-- the language runtime: the JVM has its own DNS cache (the `networkaddress.cache.ttl` setting), and
-  some configurations cache answers forever;
-- the reverse proxy: by default, nginx resolves a host name in `proxy_pass` when it loads its
-  configuration and keeps that IP until reload, unless you set up re-resolution (see its `resolver`
-  directive);
+- the language runtime: the JVM has its own DNS cache (the `networkaddress.cache.ttl` security
+  property). Current versions keep answers only for a short time by default, but with the value `-1`
+  (and, on older versions, when a security manager is installed) answers are cached forever;
+- the reverse proxy: by default, nginx resolves a host name written directly in `proxy_pass` when it
+  loads its configuration and keeps that IP until reload. To re-resolve, you need a `resolver`
+  directive plus a variable in `proxy_pass` (or, in recent versions, the `resolve` parameter on a
+  `server` inside an `upstream` block);
 - **open connections.** DNS is only used when a connection opens. A
   [connection pool](/posts/connection-pooling) or keep-alive connection uses the old IP for its whole
   life.
@@ -140,7 +150,8 @@ Some resolvers also apply their own minimum or maximum TTL. A TTL is a hint, not
 
 "This name does not exist" (`NXDOMAIN`) is cached too, and so is "this name has no record of this
 type". RFC 2308 says how long: the smaller of the SOA record's own TTL and its last field (called
-MINIMUM). See it with `dig example.com SOA`.
+MINIMUM). See both with `dig example.com SOA`. Many resolvers also put their own upper limit on
+this time.
 
 The classic trap: you run `curl https://new-api.example.com` *before* creating the record. Your
 resolver caches "does not exist". You create the record, and for you it still does not exist, for up
@@ -153,9 +164,11 @@ nothing is pushed: each cache keeps the old answer until its TTL runs out. So th
 normal record change is roughly **the old TTL**, plus clients that ignore TTLs. "Propagation checker"
 websites just ask many public resolvers and show whose cache has expired.
 
-Changing **nameservers** (moving to a new DNS host) is slower. The NS records live at the TLD and you
-do not control their TTL. For `.com` it is commonly two days, which is where the "48 hours" folklore
-comes from. During the switch, keep both DNS hosts serving the same records.
+Changing **nameservers** (moving to a new DNS host) is slower. The delegation NS records live at the
+TLD, and the registry, not you, chooses their TTL. The `.com` servers send them with a TTL of two
+days (172800 seconds), which is a likely source of the "48 hours" folklore. Resolvers may also cache
+the NS records from your own zone, with your TTL. During the switch, keep both DNS hosts serving the
+same records for at least a few days.
 
 ### A safe migration, step by step
 
@@ -170,7 +183,7 @@ Say `api.example.com` has a TTL of 86400 (one day) and moves to a new server.
 
 > [!TIP]
 > Better still, keep the DNS record pointing at a load balancer and change the load balancer's
-> targets. That is instant and needs no DNS wait (see
+> targets. That takes effect within seconds and needs no DNS wait (see
 > [deployment strategies](/posts/deployment-strategies-and-zero-downtime-migrations)).
 
 ## DNS-based load balancing, GeoDNS and failover
@@ -179,7 +192,7 @@ The authoritative server chooses what to answer, so DNS can spread traffic:
 
 | Technique | How it works | Main limit |
 |---|---|---|
-| Round robin | Several A records; the order rotates | No health checks; clients usually try the first IP |
+| Round robin | Several A records; the order rotates | No health checks; many clients just use the first IP, and some re-sort the list |
 | Weighted | Each IP returned in a chosen proportion | Applies per resolver, not per user |
 | GeoDNS / latency-based | The answer depends on where the query comes from | Sees the resolver's location, not always the user's |
 | Failover | The DNS host health-checks servers and stops returning dead ones | Detection time + TTL + clients that ignore TTLs |
@@ -187,8 +200,8 @@ The authoritative server chooses what to answer, so DNS can spread traffic:
 - **The unit is a resolver, not a user.** All users of one big resolver get the same cached answer,
   so load is rarely even.
 - **Location is a guess.** A user in Brazil whose resolver is in the US may be sent to a US region.
-  The EDNS Client Subnet extension (RFC 7871) passes part of the client's IP, but many resolvers do
-  not use it.
+  The EDNS Client Subnet extension (RFC 7871) lets a resolver pass part of the client's IP address,
+  but not all resolvers send it; some leave it out on purpose, for privacy.
 - **Failover is slow and leaky.** Health checks must fail a few times, caches must expire, and some
   clients never re-resolve while a connection is open. Expect minutes, with a long tail.
 
@@ -199,7 +212,7 @@ Rule of thumb: use DNS to choose a **region** or a **load balancer**, not indivi
 ## Email records: SPF, DKIM and DMARC
 
 If your app sends email from your domain, receiving servers check three TXT records. Without them,
-your password-reset emails often land in spam.
+your password-reset emails often land in spam or are rejected.
 
 ```text
 example.com.                TXT  "v=spf1 include:spf.mail-host.example -all"
@@ -208,11 +221,15 @@ _dmarc.example.com.         TXT  "v=DMARC1; p=none; rua=mailto:dmarc-reports@exa
 ```
 
 - **SPF** lists the servers allowed to send mail for the domain. Keep exactly **one** SPF record per
-  name. SPF allows at most 10 DNS lookups (each `include:` counts), so long chains break.
+  name; two records make the check fail. One SPF check may do at most 10 extra DNS lookups (RFC 7208).
+  Each `include:`, `a`, `mx` and `redirect=` counts, also inside included records, so long chains
+  fail.
 - **DKIM** publishes a public key at `<selector>._domainkey.<domain>`. The sender signs each message
   and receivers verify it with this key. Your email provider gives you the value.
-- **DMARC** tells receivers what to do when a message fails both checks: `p=none` (only reports),
-  `quarantine` (spam folder) or `reject`. Start with `none`, read the reports, then tighten it.
+- **DMARC** tells receivers what to do when a message fails: neither SPF nor DKIM passes for the
+  domain in the visible "From" address. The policy is `p=none` (no action, only reports),
+  `quarantine` (spam folder) or `reject`. The `rua` address receives summary reports, usually once
+  a day. Start with `none`, read the reports, then tighten it.
 
 ## Debugging with dig
 
@@ -223,14 +240,16 @@ $ dig api.example.com          # output shortened
 
 ;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 51334
 ;; ANSWER SECTION:
-api.example.com.          212   IN   CNAME   lb-7.cloud-host.example.
+api.example.com.           53   IN   CNAME   lb-7.cloud-host.example.
 lb-7.cloud-host.example.   42   IN   A       203.0.113.10
 ;; SERVER: 127.0.0.53#53(127.0.0.53) (UDP)
 ```
 
-`status` is `NOERROR` (found), `NXDOMAIN` (no such name) or `SERVFAIL` (the resolver failed). The
-second column is the **remaining** TTL in this resolver's cache. `SERVER` is the resolver that
-answered, here the local `systemd-resolved` stub.
+`status` is usually `NOERROR` (the name exists; an empty answer section means it has no record of
+this type), `NXDOMAIN` (no such name) or `SERVFAIL` (the resolver failed). The second column is the
+**remaining** TTL in this resolver's cache (the zone sets 60 for `api`, so this copy was cached
+7 seconds ago). `SERVER` is the resolver that answered, here the local `systemd-resolved` stub on
+`127.0.0.53`.
 
 | Command | What it tells you |
 |---|---|
