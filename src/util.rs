@@ -15,19 +15,26 @@ pub fn escape_html(s: &str) -> String {
     out
 }
 
-/// Human-friendly "in 2 days" / "3 hours ago" style durations.
+/// Human-friendly "2 days 5 hours" / "3 hours" style durations.
 pub fn humanize_duration(seconds: i64) -> String {
+    fn unit(n: i64, name: &str) -> String {
+        format!("{n} {name}{}", if n == 1 { "" } else { "s" })
+    }
     let s = seconds.abs();
-    let (n, unit) = if s < 60 {
-        return "less than a minute".into();
-    } else if s < 3600 {
-        (s / 60, "minute")
-    } else if s < 86_400 {
-        (s / 3600, "hour")
-    } else {
-        (s / 86_400, "day")
-    };
-    format!("{n} {unit}{}", if n == 1 { "" } else { "s" })
+    match s {
+        0..60 => "less than a minute".into(),
+        60..3600 => unit(s / 60, "minute"),
+        3600..86_400 => unit(s / 3600, "hour"),
+        _ => {
+            let (days, hours) = (s / 86_400, s % 86_400 / 3600);
+            // Hours only matter while the number of days is small.
+            if hours == 0 || days >= 7 {
+                unit(days, "day")
+            } else {
+                format!("{} {}", unit(days, "day"), unit(hours, "hour"))
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -45,5 +52,8 @@ mod tests {
         assert_eq!(humanize_duration(120), "2 minutes");
         assert_eq!(humanize_duration(3600), "1 hour");
         assert_eq!(humanize_duration(3 * 86_400 + 5), "3 days");
+        assert_eq!(humanize_duration(2 * 86_400 + 23 * 3600 + 59), "2 days 23 hours");
+        assert_eq!(humanize_duration(86_400 + 3600), "1 day 1 hour");
+        assert_eq!(humanize_duration(9 * 86_400 + 3600), "9 days");
     }
 }

@@ -540,7 +540,7 @@ legend { font-weight: 600; font-size: 0.92rem; padding: 0 0.35rem; }
 :root[data-theme="reader"] .hero-actions,
 :root[data-theme="reader"] .round-banner { display: none; }
 :root[data-theme="reader"] .post-layout { grid-template-columns: minmax(0, 1fr); }
-:root[data-theme="reader"] .post { margin: 0 auto; }
+:root[data-theme="reader"] .post { margin: 0 auto; width: 100%; } /* width: auto margins alone would shrink-to-fit and let wide <pre> blocks overflow */
 :root[data-theme="reader"] .post-header h1,
 :root[data-theme="reader"] .hero h1,
 :root[data-theme="reader"] .card-title,
