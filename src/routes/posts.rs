@@ -11,7 +11,7 @@ use crate::{
     state::AppState,
     templates::{
         CardView, Ctx, FilterView, HomePage, Layout, PostPage, PostView, ReactionsPartial, ReactionsView, Results,
-        ResultsPartial, format_date, login_href, render,
+        ResultsPartial, SortSelect, format_date, login_href, render,
     },
     votes,
 };
@@ -21,10 +21,21 @@ use crate::{
 pub async fn index(State(state): State<AppState>, ctx: Ctx, Query(params): Query<ListParams>) -> AppResult<Response> {
     let filter = ListFilter::from_params(&params);
     let cards = posts::list(&state.db, &filter).await?;
+
+    // A stale bookmark or an old page link beyond the last page: send the
+    // visitor to the last real page instead of showing "0 articles".
+    if cards.is_empty() && filter.page > 1 {
+        let total = posts::count(&state.db, &filter).await?;
+        let last = ((total + PAGE_SIZE - 1) / PAGE_SIZE).max(1);
+        if last < filter.page {
+            let to = format!("/?{}", filter.page_query(last));
+            return Ok(if ctx.htmx { hx_redirect(&to) } else { see_other(&to) });
+        }
+    }
     let results = Results::new(cards, &filter, PAGE_SIZE);
 
     if ctx.htmx {
-        return render(&ResultsPartial { results });
+        return render(&ResultsPartial { results, sort: SortSelect::new(&filter, true) });
     }
 
     let show_hero = filter.q.is_empty() && filter.tag.is_none() && filter.level.is_none() && filter.page == 1;
@@ -36,6 +47,7 @@ pub async fn index(State(state): State<AppState>, ctx: Ctx, Query(params): Query
     render(&HomePage {
         layout: Layout::new(&ctx, title),
         filter: FilterView::new(&filter),
+        sort: SortSelect::new(&filter, false),
         results,
         tags: posts::tags_with_counts(&state.db).await?,
         open_rounds: votes::open_rounds(&state.db).await?,

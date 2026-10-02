@@ -35,6 +35,21 @@
     });
   }
 
+  // The back button restores htmx's snapshot of the page, but the search box
+  // and filters in that snapshot may not match the results (the snapshot is
+  // taken after the visitor has already typed the next query). The URL is the
+  // source of truth, so re-fill the form from it.
+  function syncSearchFormWithUrl() {
+    var form = document.querySelector("form.search");
+    if (!form) return;
+    var params = new URLSearchParams(window.location.search);
+    form.querySelectorAll("input[name], select[name]").forEach(function (field) {
+      field.value = params.get(field.name) || "";
+      if (field.tagName === "SELECT" && field.selectedIndex < 0) field.selectedIndex = 0;
+    });
+  }
+  document.addEventListener("htmx:historyRestore", syncSearchFormWithUrl);
+
   document.addEventListener("DOMContentLoaded", syncButtons);
   // htmx restores pages from its history cache without a DOMContentLoaded.
   document.addEventListener("htmx:historyRestore", syncButtons);

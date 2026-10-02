@@ -56,6 +56,7 @@ pub fn router(state: AppState) -> Router {
         .route("/favicon.ico", get(|| async { Redirect::permanent("/static/favicon.svg") }))
         .nest("/static", static_files)
         .fallback(not_found)
+        .layer(middleware::from_fn(security::reject_nul_in_url))
         .layer(middleware::from_fn(security::cross_origin_guard))
         .layer(middleware::from_fn(security::security_headers))
         .layer(CompressionLayer::new())

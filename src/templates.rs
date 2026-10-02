@@ -229,21 +229,35 @@ pub struct FilterView {
     pub q: String,
     pub tag: String,
     pub level: String,
-    pub sort_choices: Vec<SortChoice>,
 }
 
 impl FilterView {
     pub fn new(f: &ListFilter) -> Self {
-        Self {
-            q: f.q.clone(),
-            tag: f.tag.clone().unwrap_or_default(),
-            level: f.level.clone().unwrap_or_default(),
-            sort_choices: Sort::CHOICES
-                .iter()
-                .filter(|(value, _)| *value != "relevance" || f.tsquery.is_some())
-                .map(|&(value, label)| SortChoice { value, label, selected: value == f.sort.as_str() })
-                .collect(),
-        }
+        Self { q: f.q.clone(), tag: f.tag.clone().unwrap_or_default(), level: f.level.clone().unwrap_or_default() }
+    }
+}
+
+/// The sort dropdown. Its first option has an empty value meaning "default
+/// order" (best match while searching, newest otherwise), so a search typed
+/// with the dropdown untouched is ranked by relevance.
+pub struct SortSelect {
+    pub choices: Vec<SortChoice>,
+    /// Rendered with `hx-swap-oob` inside htmx result fragments, so the
+    /// dropdown's labels follow the query without re-rendering the search box.
+    pub oob: bool,
+}
+
+impl SortSelect {
+    pub fn new(f: &ListFilter, oob: bool) -> Self {
+        let default = Sort::default_for(f.tsquery.is_some());
+        let default_label = Sort::CHOICES.iter().find(|(v, _)| *v == default.as_str()).map_or("Newest", |(_, l)| *l);
+        let mut choices = vec![SortChoice { value: "", label: default_label, selected: !f.explicit_sort }];
+        choices.extend(
+            Sort::CHOICES.iter().filter(|(value, _)| *value != default.as_str() && *value != "relevance").map(
+                |&(value, label)| SortChoice { value, label, selected: f.explicit_sort && value == f.sort.as_str() },
+            ),
+        );
+        Self { choices, oob }
     }
 }
 
@@ -252,6 +266,7 @@ impl FilterView {
 pub struct HomePage {
     pub layout: Layout,
     pub filter: FilterView,
+    pub sort: SortSelect,
     pub results: Results,
     pub tags: Vec<TagCount>,
     pub open_rounds: Vec<Round>,
@@ -259,9 +274,10 @@ pub struct HomePage {
 }
 
 #[derive(Template)]
-#[template(path = "partials/results.html")]
+#[template(path = "partials/results_fragment.html")]
 pub struct ResultsPartial {
     pub results: Results,
+    pub sort: SortSelect,
 }
 
 pub struct PostView {

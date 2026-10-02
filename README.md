@@ -66,8 +66,10 @@ system-design-transparent make-admin <user>  # grant admin rights
 ### Tests
 
 ```sh
-# Integration tests create a throwaway database per test on this server.
-DATABASE_URL=postgres://postgres:postgres@localhost:5432/postgres cargo test
+# Integration tests create a throwaway database per test on the server in
+# DATABASE_URL (read from .env), so that role needs permission to create
+# databases. The `sdt` user of `docker compose up -d db` has it.
+cargo test
 cargo clippy --all-targets -- -D warnings
 cargo fmt --check
 ```
@@ -106,7 +108,7 @@ documented list. The important ones for production:
 
 | Variable | Notes |
 |----------|-------|
-| `DATABASE_URL` | Required. |
+| `DATABASE_URL` | Required. For a remote or managed database add `?sslmode=require` (or `verify-full`). |
 | `IP_HASH_SECRET` | Long random string. Voter IPs are stored only as keyed hashes. |
 | `TRUSTED_PROXY_HOPS` | Number of proxies in front of the app (usually `1`). |
 | `COOKIE_SECURE` | `true` when served over HTTPS. |

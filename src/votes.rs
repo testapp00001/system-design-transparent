@@ -196,16 +196,20 @@ async fn build_view(
 ) -> Result<PollView, sqlx::Error> {
     let mut suggestions = load_suggestions(db, poll.id, ip_hash, include_hidden).await?;
     let (votes_used, suggestions_used): (i64, i64) = sqlx::query_as(
-        "SELECT (SELECT count(*) FROM suggestion_votes WHERE poll_id = $1 AND voter_ip_hash = $2),
+        // Votes on suggestions an admin has hidden don't count against the cap.
+        "SELECT (SELECT count(*) FROM suggestion_votes v JOIN suggestions s ON s.id = v.suggestion_id
+                 WHERE v.poll_id = $1 AND v.voter_ip_hash = $2 AND NOT s.is_hidden),
                 (SELECT count(*) FROM suggestions WHERE poll_id = $1 AND author_ip_hash = $2)",
     )
     .bind(poll.id)
     .bind(ip_hash)
     .fetch_one(db)
     .await?;
-    let leader_id = poll
-        .winner_suggestion_id
-        .or_else(|| suggestions.iter().find(|s| !s.is_hidden && s.vote_count > 0).map(|s| s.id));
+    // The frozen winner counts only while it is still visible; if an admin
+    // hid it, fall back to the best visible suggestion.
+    let visible_winner = poll.winner_suggestion_id.filter(|w| suggestions.iter().any(|s| s.id == *w && !s.is_hidden));
+    let leader_id =
+        visible_winner.or_else(|| suggestions.iter().find(|s| !s.is_hidden && s.vote_count > 0).map(|s| s.id));
     for s in &mut suggestions {
         s.is_leader = Some(s.id) == leader_id;
     }
@@ -296,6 +300,13 @@ pub async fn submit_suggestion(
 ) -> Result<(), VoteError> {
     let title = title.split_whitespace().collect::<Vec<_>>().join(" ");
     let details = details.trim();
+    // Control characters (e.g. NUL, which Postgres rejects in text) are never
+    // legitimate here; line breaks and tabs in the details are fine.
+    if title.chars().any(char::is_control)
+        || details.chars().any(|c| c.is_control() && !matches!(c, '\n' | '\r' | '\t'))
+    {
+        return Err(VoteError::Invalid("Please remove special characters from your suggestion.".into()));
+    }
     let len = title.chars().count();
     if !(5..=120).contains(&len) {
         return Err(VoteError::Invalid("The topic title should be 5–120 characters.".into()));
@@ -355,7 +366,8 @@ pub async fn set_vote(
         .fetch_optional(&mut *tx)
         .await?;
     let (poll_id, hidden) = row.ok_or(VoteError::NotFound)?;
-    if hidden {
+    // You can't vote for a hidden suggestion, but you can always take a vote back.
+    if hidden && on {
         return Err(VoteError::NotFound);
     }
     if !poll_is_open(&mut tx, poll_id).await? {
@@ -365,8 +377,9 @@ pub async fn set_vote(
 
     if on {
         let (used, already): (i64, bool) = sqlx::query_as(
-            "SELECT count(*), coalesce(bool_or(suggestion_id = $3), false)
-             FROM suggestion_votes WHERE poll_id = $1 AND voter_ip_hash = $2",
+            "SELECT count(*) FILTER (WHERE NOT s.is_hidden), coalesce(bool_or(v.suggestion_id = $3), false)
+             FROM suggestion_votes v JOIN suggestions s ON s.id = v.suggestion_id
+             WHERE v.poll_id = $1 AND v.voter_ip_hash = $2",
         )
         .bind(poll_id)
         .bind(ip_hash)
@@ -424,9 +437,11 @@ pub async fn winners_for(db: &PgPool, round_ids: &[i64]) -> Result<HashMap<i64, 
         "SELECT p.round_id, t.name AS tag_name, s.title, s.vote_count, fp.slug AS post_slug, fp.title AS post_title
          FROM vote_polls p
          JOIN tags t ON t.slug = p.tag_slug
-         -- Until the background job freezes the winner (up to a minute after the
-         -- round ends), show the current leader so results appear immediately.
-         LEFT JOIN suggestions s ON s.id = COALESCE(p.winner_suggestion_id, (
+         -- Use the frozen winner while it is visible. Until the background job
+         -- freezes it (up to a minute after the round ends), or if an admin hid
+         -- it later, show the best visible suggestion instead.
+         LEFT JOIN suggestions s ON s.id = COALESCE(
+             (SELECT w.id FROM suggestions w WHERE w.id = p.winner_suggestion_id AND NOT w.is_hidden), (
              SELECT l.id FROM suggestions l
              WHERE l.poll_id = p.id AND NOT l.is_hidden AND l.vote_count > 0
              ORDER BY l.vote_count DESC, l.created_at ASC
@@ -498,6 +513,9 @@ pub async fn create_round(
     if title.is_empty() || title.chars().count() > 120 {
         return Err(VoteError::Invalid("Title must be 1–120 characters.".into()));
     }
+    if title.chars().chain(description.chars()).any(|c| c.is_control() && !matches!(c, '\n' | '\r' | '\t')) {
+        return Err(VoteError::Invalid("Title and description must not contain control characters.".into()));
+    }
     let mut tx = db.begin().await?;
     let known: i64 = sqlx::query_scalar("SELECT count(*) FROM tags WHERE slug = ANY($1)")
         .bind(tag_slugs)
@@ -553,6 +571,9 @@ pub async fn set_hidden(db: &PgPool, suggestion_id: i64, hidden: bool) -> Result
 /// Links a suggestion to the article that answered it (or unlinks with `None`).
 pub async fn set_fulfilled(db: &PgPool, suggestion_id: i64, post_slug: Option<&str>) -> Result<i64, VoteError> {
     let post_id: Option<i64> = match post_slug {
+        Some(slug) if !crate::content::is_valid_slug(slug) => {
+            return Err(VoteError::Invalid(format!("No post with slug {slug:?}.")));
+        }
         Some(slug) => Some(
             sqlx::query_scalar("SELECT id FROM posts WHERE slug = $1")
                 .bind(slug)

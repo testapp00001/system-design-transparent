@@ -40,22 +40,41 @@ impl FromRequestParts<AppState> for ClientIp {
 /// With `hops` trusted proxies, the client address is the `hops`-th entry from
 /// the right of `X-Forwarded-For`. Anything further left was supplied by the
 /// client and cannot be trusted.
+///
+/// The entry is picked *before* parsing: if entries that fail to parse were
+/// dropped first, the index would shift left into client-controlled values.
+/// If the chosen entry is missing or unparsable we use the TCP peer instead.
 pub fn resolve_client_ip(headers: &HeaderMap, peer: IpAddr, hops: usize) -> IpAddr {
     if hops == 0 {
         return peer;
     }
-    let chain: Vec<IpAddr> = headers
+    // Work on raw bytes so a non-UTF-8 value injected by the client can't make
+    // a whole header line (including our proxy's entry) disappear.
+    let entries: Vec<&[u8]> = headers
         .get_all("x-forwarded-for")
         .iter()
-        .filter_map(|v| v.to_str().ok())
-        .flat_map(|v| v.split(','))
-        .filter_map(|s| s.trim().parse().ok())
+        .flat_map(|v| v.as_bytes().split(|b| *b == b','))
+        .map(<[u8]>::trim_ascii)
+        .filter(|e| !e.is_empty())
         .collect();
-    if chain.is_empty() {
+    if entries.len() < hops {
         return peer;
     }
-    let index = chain.len().saturating_sub(hops);
-    chain[index]
+    std::str::from_utf8(entries[entries.len() - hops]).ok().and_then(parse_forwarded_ip).unwrap_or(peer)
+}
+
+/// Accepts `1.2.3.4`, `1.2.3.4:5678`, `2001:db8::1`, `[2001:db8::1]` and
+/// `[2001:db8::1]:5678` (some proxies include the client port).
+fn parse_forwarded_ip(entry: &str) -> Option<IpAddr> {
+    if let Ok(ip) = entry.parse() {
+        return Some(ip);
+    }
+    if let Some(rest) = entry.strip_prefix('[') {
+        return rest.split_once(']')?.0.parse().ok();
+    }
+    let (host, port) = entry.rsplit_once(':')?;
+    port.parse::<u16>().ok()?;
+    host.parse::<std::net::Ipv4Addr>().ok().map(IpAddr::V4)
 }
 
 /// Collapse an address to the unit we rate-limit on: the full IPv4 address,
@@ -112,6 +131,20 @@ mod tests {
     fn takes_nth_from_right_for_multiple_hops() {
         let ip = resolve_client_ip(&headers("6.6.6.6, 203.0.113.9, 10.1.1.1"), "10.0.0.1".parse().unwrap(), 2);
         assert_eq!(ip, "203.0.113.9".parse::<IpAddr>().unwrap());
+    }
+
+    #[test]
+    fn picks_entry_before_parsing() {
+        let peer: IpAddr = "10.0.0.1".parse().unwrap();
+        // Our proxy appended "ip:port"; the client-supplied 6.6.6.6 must not win.
+        let ip = resolve_client_ip(&headers("6.6.6.6, 203.0.113.9:51234"), peer, 1);
+        assert_eq!(ip, "203.0.113.9".parse::<IpAddr>().unwrap());
+        let ip = resolve_client_ip(&headers("6.6.6.6, [2001:db8::7]:443"), peer, 1);
+        assert_eq!(ip, "2001:db8::7".parse::<IpAddr>().unwrap());
+        // Unparsable entry at the trusted position: fall back to the peer.
+        assert_eq!(resolve_client_ip(&headers("6.6.6.6, unknown"), peer, 1), peer);
+        // Fewer entries than trusted hops: misconfiguration, use the peer.
+        assert_eq!(resolve_client_ip(&headers("6.6.6.6"), peer, 2), peer);
     }
 
     #[test]
