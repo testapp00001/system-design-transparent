@@ -118,10 +118,20 @@ async fn home_search_and_post_pages(db: PgPool) {
     let app = TestApp::new(db).await;
     let post = app.first_post();
 
+    let published = app.library.posts.iter().filter(|p| !p.draft).count();
     let res = app.get("/", Opts::default()).await;
     assert_eq!(res.status, StatusCode::OK);
     assert!(res.body.contains("<html"));
-    assert!(res.body.contains(&post.slug));
+    assert!(res.body.contains(&format!("{published} articles")), "home shows the total");
+
+    // Every post is reachable by paging through the list.
+    let pages = published.div_ceil(12);
+    let mut seen = 0;
+    for page in 1..=pages {
+        let res = app.get(&format!("/?page={page}"), Opts::default()).await;
+        seen += res.body.matches(r#"class="card-title""#).count();
+    }
+    assert_eq!(seen, published);
 
     // htmx search returns only the results fragment.
     let word = post.title.split_whitespace().max_by_key(|w| w.len()).unwrap();
