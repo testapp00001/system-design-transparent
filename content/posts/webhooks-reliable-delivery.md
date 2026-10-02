@@ -226,6 +226,8 @@ address, and connect to exactly that address:
 ```python
 import ipaddress, socket
 
+NAT64 = ipaddress.ip_network("64:ff9b::/96")
+
 class BlockedDestination(Exception):
     pass
 
@@ -233,14 +235,20 @@ def resolve_public_ips(host: str, port: int) -> list:
     infos = socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
     ips = []
     for info in infos:
-        ip = ipaddress.ip_address(info[4][0])
+        ip = check = ipaddress.ip_address(info[4][0])
         if ip.version == 6 and ip.ipv4_mapped:     # ::ffff:10.0.0.5 is really 10.0.0.5
-            ip = ip.ipv4_mapped
-        if not ip.is_global or ip.is_multicast:   # is_global covers all ranges above
-            raise BlockedDestination(f"{host} resolves to {ip}")
+            check = ip.ipv4_mapped
+        elif ip.version == 6 and ip in NAT64:      # 64:ff9b::a00:5 reaches 10.0.0.5 via NAT64
+            check = ipaddress.ip_address(int(ip) & 0xFFFFFFFF)
+        if not check.is_global or check.is_multicast:   # is_global covers all ranges above
+            raise BlockedDestination(f"{host} resolves to {check}")
         ips.append(ip)
     return ips  # connect to one of these; do not let the HTTP client resolve again
 ```
+
+IPv6 has several ways to wrap an IPv4 address, and what `is_global` returns for them has changed
+between Python releases. That is one more reason to add the network-level defence below rather than
+rely on an address check alone.
 
 Also: do not follow redirects (or check every hop), require HTTPS where you can, and allow only the
 standard ports (443, plus 80 only if you still accept plain HTTP). Many HTTP clients make "connect

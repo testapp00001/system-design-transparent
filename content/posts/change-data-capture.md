@@ -351,7 +351,7 @@ CDC is also not [event sourcing](/posts/event-sourcing-and-cqrs). In event sourc
 - PostgreSQL documentation: [Logical Decoding](https://www.postgresql.org/docs/current/logicaldecoding.html)
 - PostgreSQL documentation: [Replication settings](https://www.postgresql.org/docs/current/runtime-config-replication.html), including `max_slot_wal_keep_size`
 - PostgreSQL documentation: [Logical replication failover](https://www.postgresql.org/docs/current/logical-replication-failover.html) (PostgreSQL 17 and later)
-- MySQL documentation: [Binary Logging Formats](https://dev.mysql.com/doc/refman/8.0/en/binary-log-formats.html)
+- MySQL documentation: [Binary Logging Formats](https://dev.mysql.com/doc/refman/8.4/en/binary-log-formats.html)
 - [Debezium documentation](https://debezium.io/documentation/), including incremental snapshots and the outbox event router
 - Apache Kafka documentation: [Kafka Connect](https://kafka.apache.org/documentation/#connect)
 - Martin Kleppmann, *Designing Data-Intensive Applications* (first edition), chapter 11 "Stream Processing", the part on change data capture in the section "Databases and Streams"
