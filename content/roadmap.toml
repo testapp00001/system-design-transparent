@@ -21,9 +21,11 @@ description = "Mental tools you will use in every other section."
 
   [[section.topic]]
   title = "Concurrency models: threads, async/await, event loops, actors"
+  post = "concurrency-models"
 
   [[section.topic]]
   title = "Queueing basics: Little's law, utilisation and why latency explodes at 90% load"
+  post = "queueing-theory-littles-law"
 
   [[section.topic]]
   title = "Linux for backend developers: processes, file descriptors, signals"
@@ -38,12 +40,27 @@ description = "The plumbing every request travels through."
 
   [[section.topic]]
   title = "HTTP/1.1, HTTP/2 and HTTP/3 (QUIC)"
+  post = "http-versions"
 
   [[section.topic]]
   title = "TLS and HTTPS: handshakes, certificates, termination"
+  post = "reverse-proxies-and-tls"
 
   [[section.topic]]
   title = "DNS: resolution, TTLs and DNS-based load balancing"
+  post = "dns-for-backend-developers"
+
+  [[section.topic]]
+  title = "CDNs and edge caching"
+  post = "http-caching-and-cdns"
+
+  [[section.topic]]
+  title = "Reverse proxies: nginx, Caddy, Envoy, HAProxy"
+  post = "reverse-proxies-and-tls"
+
+[[section]]
+title = "Realtime systems"
+description = "Pushing data to users the moment it changes: chat, presence, live collaboration, calls."
 
   [[section.topic]]
   title = "Polling, long polling, SSE, WebSockets"
@@ -54,10 +71,20 @@ description = "The plumbing every request travels through."
   post = "scaling-websockets-chat"
 
   [[section.topic]]
-  title = "CDNs and edge caching"
+  title = "Pub/sub backbones: Redis Pub/Sub, Redis Streams, NATS"
+  post = "pub-sub-redis-nats"
 
   [[section.topic]]
-  title = "Reverse proxies: nginx, Caddy, Envoy, HAProxy"
+  title = "Presence at scale: online indicators and typing status"
+  post = "presence-at-scale"
+
+  [[section.topic]]
+  title = "Collaborative editing: OT vs CRDTs"
+  post = "collaborative-editing-ot-crdt"
+
+  [[section.topic]]
+  title = "WebRTC: peer-to-peer, TURN and SFUs"
+  post = "webrtc-and-sfu"
 
 [[section]]
 title = "APIs & service communication"
@@ -82,6 +109,7 @@ description = "Contracts between programs, and how to keep them reliable."
 
   [[section.topic]]
   title = "Webhooks: delivering events to other systems reliably"
+  post = "webhooks-reliable-delivery"
 
   [[section.topic]]
   title = "API gateways and backend-for-frontend (BFF)"
@@ -128,9 +156,11 @@ description = "Where most performance problems — and most data loss — come f
 
   [[section.topic]]
   title = "LSM trees vs B-trees"
+  post = "lsm-trees-vs-b-trees"
 
   [[section.topic]]
   title = "ORMs, the N+1 problem and when to write SQL"
+  post = "orm-n-plus-one"
 
   [[section.topic]]
   title = "Vector search and embeddings"
@@ -145,9 +175,11 @@ description = "Making reads cheap without serving wrong data."
 
   [[section.topic]]
   title = "HTTP caching: Cache-Control, ETags, CDNs"
+  post = "http-caching-and-cdns"
 
   [[section.topic]]
   title = "Redis beyond caching: data structures, pub/sub, streams"
+  post = "redis-beyond-caching"
 
 [[section]]
 title = "Scaling & reliability"
@@ -163,9 +195,11 @@ description = "Serving more traffic, and failing gracefully when things break."
 
   [[section.topic]]
   title = "Autoscaling"
+  post = "autoscaling"
 
   [[section.topic]]
   title = "Multi-region and disaster recovery"
+  post = "multi-region-and-disaster-recovery"
 
   [[section.topic]]
   title = "Chaos engineering"
@@ -184,12 +218,15 @@ description = "What changes when one machine becomes many."
 
   [[section.topic]]
   title = "Consensus and leader election (Raft)"
+  post = "consensus-and-leader-election"
 
   [[section.topic]]
   title = "Time and ordering: clocks, Lamport timestamps, Snowflake IDs"
+  post = "ids-clocks-and-ordering"
 
   [[section.topic]]
   title = "Distributed locks and their pitfalls"
+  post = "distributed-locks"
 
   [[section.topic]]
   title = "Exactly-once processing: myth and practice"
@@ -208,9 +245,11 @@ description = "Doing work later, elsewhere, reliably."
 
   [[section.topic]]
   title = "Event-driven architecture, event sourcing and CQRS"
+  post = "event-sourcing-and-cqrs"
 
   [[section.topic]]
   title = "Change data capture (CDC)"
+  post = "change-data-capture"
 
   [[section.topic]]
   title = "Stream processing"
@@ -232,6 +271,7 @@ description = "How to structure code and systems so they can keep changing."
 
   [[section.topic]]
   title = "Feature flags"
+  post = "feature-flags"
 
   [[section.topic]]
   title = "Multi-tenancy patterns"
@@ -245,6 +285,11 @@ description = "Getting code to production safely, quickly and repeatably."
   post = "docker-to-kubernetes"
 
   [[section.topic]]
+  title = "Deploying to a single VPS: systemd or Compose, a reverse proxy and backups"
+  post = "deploy-on-a-single-vps"
+  note = "Often all you need, and a good way to learn what the platforms do for you."
+
+  [[section.topic]]
   title = "CI/CD pipelines and the hotfix problem"
   post = "ci-cd-and-hotfixes"
 
@@ -254,12 +299,15 @@ description = "Getting code to production safely, quickly and repeatably."
 
   [[section.topic]]
   title = "Infrastructure as code (Terraform, OpenTofu, Pulumi)"
+  post = "infrastructure-as-code"
 
   [[section.topic]]
   title = "Secrets management"
+  post = "secrets-management"
 
   [[section.topic]]
   title = "The twelve-factor app"
+  post = "twelve-factor-app"
 
 [[section]]
 title = "Observability"
@@ -271,9 +319,11 @@ description = "Knowing what production is doing, and why."
 
   [[section.topic]]
   title = "Incident response and blameless postmortems"
+  post = "incident-response-and-postmortems"
 
   [[section.topic]]
   title = "Profiling and performance debugging"
+  post = "profiling-and-performance-debugging"
 
 [[section]]
 title = "Security"
@@ -285,9 +335,11 @@ description = "Protecting users and their data."
 
   [[section.topic]]
   title = "OAuth 2.0 and OpenID Connect"
+  post = "oauth2-and-openid-connect"
 
   [[section.topic]]
   title = "Authorization models: RBAC, ABAC, ReBAC"
+  post = "authorization-models"
 
   [[section.topic]]
   title = "OWASP Top 10 for backend developers"
@@ -305,6 +357,8 @@ description = "How real companies solved real problems, and classic design exerc
 
   [[section.topic]]
   title = "Design a news feed"
+  post = "news-feed-fan-out"
 
   [[section.topic]]
   title = "Design a notification system"
+  post = "notification-system-design"
